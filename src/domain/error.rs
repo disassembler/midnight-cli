@@ -1,3 +1,6 @@
+//! Domain error types
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use thiserror::Error;
 

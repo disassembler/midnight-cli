@@ -1,3 +1,6 @@
+//! Key material and metadata types
+#![allow(dead_code)]
+
 use super::key_type::{KeyPurpose, KeyTypeId};
 use chrono::{DateTime, Utc};
 use secrecy::SecretString;

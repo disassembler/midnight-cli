@@ -6,9 +6,9 @@ pub mod domain;
 pub mod storage;
 
 // Re-export commonly used items
-pub use application::{KeyDerivation, KeyGeneration, WitnessCreation, WitnessOutput};
+pub use application::{KeyDerivation, KeyGeneration, WitnessCreation};
 pub use domain::{
-    DomainError, DomainResult, KeyInfo, KeyMaterial, KeyMetadata, KeyPurpose, KeyTypeId,
-    MidnightKeyPath, Suri,
+    DomainError, DomainResult, KeyMaterial, KeyMetadata, KeyPurpose, KeyTypeId, MidnightKeyPath,
+    Suri,
 };
-pub use storage::{CardanoKeyFile, Gpg, KeyReader, KeyWriter};
+pub use storage::{CardanoKeyFile, KeyReader, KeyWriter};

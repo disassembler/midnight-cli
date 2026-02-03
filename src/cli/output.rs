@@ -1,4 +1,4 @@
-use crate::domain::{KeyInfo, KeyMaterial};
+use crate::domain::KeyMaterial;
 use serde::{Deserialize, Serialize};
 use serde_json;
 

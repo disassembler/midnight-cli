@@ -1,3 +1,6 @@
+//! Cardano-style JSON key file format with CBOR encoding
+#![allow(dead_code)]
+
 use crate::domain::{DomainError, DomainResult, KeyMaterial};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};

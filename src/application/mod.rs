@@ -5,4 +5,4 @@ pub mod witness_creation;
 // Re-export commonly used items
 pub use key_derivation::KeyDerivation;
 pub use key_generation::KeyGeneration;
-pub use witness_creation::{WitnessCreation, WitnessOutput};
+pub use witness_creation::WitnessCreation;

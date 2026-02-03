@@ -1,3 +1,6 @@
+//! Key file writing utilities
+#![allow(dead_code)]
+
 use crate::domain::{DomainResult, KeyMaterial};
 use crate::storage::cardano_format::CardanoKeyFile;
 use std::path::{Path, PathBuf};

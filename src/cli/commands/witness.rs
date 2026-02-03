@@ -1,5 +1,5 @@
 use crate::application::WitnessCreation;
-use crate::domain::{KeyPurpose, KeyTypeId};
+use crate::domain::KeyPurpose;
 use crate::storage::KeyReader;
 use anyhow::Result;
 use clap::{Args, Subcommand};
