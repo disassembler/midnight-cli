@@ -1,3 +1,6 @@
+//! SURI (Substrate URI) parser for hierarchical key derivation
+#![allow(dead_code)]
+
 use crate::domain::{DerivationSegment, DomainError, DomainResult, SeedSource, Suri};
 use secrecy::SecretString;
 

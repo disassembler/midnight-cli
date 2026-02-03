@@ -1,6 +1,6 @@
 use crate::crypto::{generate_mnemonic, Ed25519, Sr25519, SuriParser};
 use crate::domain::{
-    DomainResult, KeyMaterial, MidnightKeyPath, KeyPurpose, KeyTypeId, Suri,
+    DomainResult, KeyMaterial, MidnightKeyPath, KeyPurpose, KeyTypeId,
 };
 use crate::storage::{KeyReader, KeyWriter};
 use secrecy::{ExposeSecret, SecretString};
@@ -35,6 +35,7 @@ impl KeyGeneration {
     }
 
     /// Generate a key from a mnemonic file (supports GPG encryption)
+    #[allow(dead_code)]
     pub fn generate_from_mnemonic_file(
         mnemonic_file: &Path,
         purpose: KeyPurpose,
@@ -97,6 +98,7 @@ impl KeyGeneration {
     }
 
     /// Generate and save a key as Cardano-style .skey/.vkey files
+    #[allow(dead_code)]
     pub fn generate_and_save(
         mnemonic: &str,
         purpose: KeyPurpose,

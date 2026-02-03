@@ -1,8 +1,10 @@
-use crate::crypto::{normalize_mnemonic, validate_mnemonic, Ed25519, Sr25519};
+//! Key file reading utilities
+#![allow(dead_code)]
+
+use crate::crypto::{normalize_mnemonic, validate_mnemonic};
 use crate::domain::{DomainError, DomainResult, KeyTypeId};
 use crate::storage::{cardano_format::CardanoKeyFile, gpg::Gpg};
 use secrecy::SecretString;
-use sp_core::Pair;
 use std::path::Path;
 
 /// Read keys from various sources
@@ -33,7 +35,7 @@ impl KeyReader {
             Gpg::decrypt_file(path)?
         } else {
             // Read plain text file
-            std::fs::read_to_string(path).map_err(|e| DomainError::KeyFileNotFound {
+            std::fs::read_to_string(path).map_err(|_| DomainError::KeyFileNotFound {
                 path: path.to_path_buf(),
             })?
         };

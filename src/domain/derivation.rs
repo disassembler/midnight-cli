@@ -1,3 +1,6 @@
+//! Derivation path types and SURI implementation for hierarchical key derivation
+#![allow(dead_code)]
+
 use super::error::{DomainError, DomainResult};
 use super::key_type::{KeyPurpose, KeyTypeId};
 use secrecy::SecretString;

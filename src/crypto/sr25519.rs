@@ -1,5 +1,5 @@
 use crate::domain::{DomainError, DomainResult, KeyMaterial, KeyMetadata, KeyPurpose, KeyTypeId};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use sp_core::{
     crypto::{Pair as PairTrait, Ss58Codec},
     sr25519::{Pair, Public, Signature},
@@ -16,6 +16,7 @@ impl Sr25519 {
     }
 
     /// Generate a keypair from a seed
+    #[allow(dead_code)]
     pub fn from_seed(seed: &[u8]) -> DomainResult<Pair> {
         if seed.len() != 32 {
             return Err(DomainError::CryptoError(format!(
