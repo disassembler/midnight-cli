@@ -3,6 +3,12 @@ name = "midnight-cli"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
+license = "Apache-2.0"
+authors = ["Midnight Foundation"]
+description = "Key management and governance tooling for Midnight Network validators and participants"
+repository = "https://github.com/midnight-network/midnight-cli"
+keywords = ["midnight", "blockchain", "crypto", "governance", "keys"]
+categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
 # Substrate primitives
