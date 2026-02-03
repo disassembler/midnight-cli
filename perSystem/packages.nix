@@ -29,9 +29,6 @@
 
           meta = {
             mainProgram = pname;
-            maintainers = with lib.maintainers; [
-              disassembler
-            ];
             license = with lib.licenses; [
               asl20
             ];
