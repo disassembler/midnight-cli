@@ -53,20 +53,20 @@ cargo check
 ### Running
 
 ```bash
-# Generate keys from a new mnemonic
-cargo run -- key generate --purpose governance --index 0 --output ./keys
+# Generate governance key from new mnemonic (no index - one per wallet)
+cargo run -- key generate --purpose governance --output ./keys
 
-# Generate keys from existing mnemonic
-cargo run -- key generate --purpose governance --index 0 --mnemonic "seed phrase..." --output ./keys
+# Generate governance key from existing mnemonic
+cargo run -- key generate --purpose governance --mnemonic "seed phrase..." --output ./keys
 
-# Generate keys from mnemonic file (plain or GPG-encrypted)
+# Generate payment key from mnemonic file (index required - multiple per wallet)
 cargo run -- key generate --purpose payment --index 0 --mnemonic-file mnemonic.txt --output ./keys
 
-# Batch generate multiple keys
-cargo run -- key batch --mnemonic-file mnemonic.txt --purpose governance --start 0 --count 5 --output ./keys
+# Batch generate multiple payment keys
+cargo run -- key batch --mnemonic-file mnemonic.txt --purposes payment --indices 0,1,2,3,4 --output ./keys
 
-# Derive a key on-demand (no file output)
-cargo run -- key derive --mnemonic-file mnemonic.txt --purpose governance --index 0 --format json
+# Derive a key on-demand (no file output) - default path //midnight//governance
+cargo run -- key derive --mnemonic-file mnemonic.txt --derivation "//midnight//governance" --purpose governance --key-type sr25519 --format json
 
 # Inspect a key file
 cargo run -- key inspect governance-0.skey
@@ -75,6 +75,15 @@ cargo run -- key inspect governance-0.skey
 cargo run -- witness create --payload proposal.bin --key-file governance-0.skey --output witness.json --yes
 
 # Create a witness from mnemonic file (SIMPLIFIED - recommended)
+# Uses default path: //midnight//governance (matches Polkadot Vault)
+cargo run -- witness create \
+  --payload proposal.bin \
+  --mnemonic-file mnemonic.txt \
+  --purpose governance \
+  --output witness.json \
+  --yes
+
+# Create a witness with numbered key (optional)
 cargo run -- witness create \
   --payload proposal.bin \
   --mnemonic-file mnemonic.txt \
@@ -83,12 +92,12 @@ cargo run -- witness create \
   --output witness.json \
   --yes
 
-# Create a witness with explicit derivation path (advanced)
+# Create a witness with explicit derivation path (advanced - for payment keys)
 cargo run -- witness create \
-  --payload proposal.bin \
+  --payload transaction.bin \
   --mnemonic-file mnemonic.txt \
-  --derivation-path "//midnight//governance//42" \
-  --purpose governance \
+  --derivation-path "//midnight//payment//42" \
+  --purpose payment \
   --output witness.json \
   --yes
 
@@ -215,7 +224,11 @@ Secrets use `secrecy::SecretString` to prevent accidental logging and are never 
 
 ### Substrate SURI Derivation
 - Full support for `SEED[//hard][/soft][///password]` format
-- Standard Midnight paths: `//midnight//governance//INDEX`, `//midnight//payment//INDEX`, `//midnight//finality//INDEX`
+- Standard Midnight paths:
+  - `//midnight//governance` (default, matches Polkadot Vault)
+  - `//midnight//governance//INDEX` (numbered keys)
+  - `//midnight//payment//INDEX`
+  - `//midnight//finality//INDEX`
 - Custom derivation paths supported
 
 ### Cardano-Style Key Files

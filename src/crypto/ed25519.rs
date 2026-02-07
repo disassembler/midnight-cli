@@ -53,6 +53,16 @@ impl Ed25519 {
         )
     }
 
+    /// Convert public key to SS58 address with custom network prefix
+    /// Currently supports: substrate, westend (both use prefix 42)
+    pub fn to_ss58_address_with_network(public: &Public, network: &str) -> Result<String, String> {
+        let format = match network.to_lowercase().as_str() {
+            "westend" | "substrate" => sp_core::crypto::Ss58AddressFormatRegistry::SubstrateAccount,
+            _ => return Err(format!("Unsupported network: {}. Supported networks: substrate, westend", network)),
+        };
+        Ok(public.to_ss58check_with_version(format.into()))
+    }
+
     /// Convert pair to KeyMaterial
     pub fn to_key_material(
         pair: &Pair,

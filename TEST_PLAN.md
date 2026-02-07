@@ -6,12 +6,13 @@ The Midnight CLI is a comprehensive key management and witness generation tool f
 
 **Key Capabilities:**
 - Generate BIP39 24-word mnemonics
-- Derive keys using Substrate SURI paths (`//midnight//governance//0`)
+- Derive keys using Substrate SURI paths (`//midnight//governance`, `//midnight//payment//{index}`)
 - Support sr25519 (governance, payment) and ed25519 (finality) keys
 - Generate Cardano-style `.skey` and `.vkey` JSON files with CBOR encoding
 - Create and verify cryptographic witnesses for governance proposals
 - Two workflows: pre-derive (save key files) and on-demand (derive dynamically)
 - Optional GPG encryption for mnemonic files
+- Security policy: One governance key and one finality key per wallet (no index), multiple payment keys (index required)
 
 ## Architecture
 
@@ -49,18 +50,18 @@ cargo build --release
 
 **Command**:
 ```bash
-midnight-cli key generate --purpose governance --index 0 --output ./keys/
+midnight-cli key generate --purpose governance --output ./keys/
 ```
 
 **Expected Output**:
 - New 24-word mnemonic phrase displayed
 - Warning: "Store this mnemonic in a secure location!"
-- Files created: `governance-0.skey` and `governance-0.vkey`
+- Files created: `governance.skey` and `governance.vkey`
 
 **Validation**:
 ```bash
 # Check file structure
-cat ./keys/governance-0.vkey
+cat ./keys/governance.vkey
 ```
 
 **Expected JSON Structure**:
@@ -74,7 +75,7 @@ cat ./keys/governance-0.vkey
 
 ### Scenario 2: Batch Key Generation
 
-**Purpose**: Generate multiple keys from a single mnemonic (cold storage setup)
+**Purpose**: Generate multiple payment keys from a single mnemonic (cold storage setup)
 
 **Test Mnemonic**:
 ```
@@ -87,38 +88,62 @@ mkdir -p ./scratch/keys-batch
 
 midnight-cli key batch \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
-  --purpose governance \
-  --start 0 \
-  --count 5 \
+  --purposes payment \
+  --indices 0,1,2,3,4 \
   --output ./scratch/keys-batch/
 ```
 
 **Expected Output**:
 - 10 files created (5 .skey + 5 .vkey pairs)
-- Files: `governance-0.skey`, `governance-0.vkey`, ..., `governance-4.skey`, `governance-4.vkey`
-- Console output: "Batch generated 5 keys successfully"
+- Files: `payment-0.skey`, `payment-0.vkey`, ..., `payment-4.skey`, `payment-4.vkey`
+- Console output: "Generated 5 key pairs"
 
 **Validation**:
 ```bash
 ls -1 ./scratch/keys-batch/
 # Should show:
-# governance-0.skey
-# governance-0.vkey
-# governance-1.skey
-# governance-1.vkey
+# payment-0.skey
+# payment-0.vkey
+# payment-1.skey
+# payment-1.vkey
 # ... (up to 4)
 ```
+
+**Note**: Batch generation is only used for payment keys since governance and finality keys have no index (one per wallet).
 
 ### Scenario 3: On-Demand Key Derivation
 
 **Purpose**: Derive keys dynamically without saving files (air-gap signing scenario)
 
-**Command**:
+**Command (Governance - no index)**:
 ```bash
 midnight-cli key derive \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
+  --derivation "//midnight//governance" \
+  --key-type sr25519 \
+  --purpose governance \
+  --format json
+```
+
+**Expected Output** (JSON format):
+```json
+{
+  "keyType": "Sr25519",
+  "keyPurpose": "Governance",
+  "publicKey": "0x...",
+  "secretKey": "0x...",
+  "ss58Address": "5...",
+  "derivationPath": "//midnight//governance"
+}
+```
+
+**Command (Payment - with index)**:
+```bash
+midnight-cli key derive \
+  --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
+  --derivation "//midnight//payment//2" \
+  --key-type sr25519 \
   --purpose payment \
-  --index 2 \
   --format json
 ```
 
@@ -138,8 +163,9 @@ midnight-cli key derive \
 ```bash
 midnight-cli key derive \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
+  --derivation "//midnight//payment//2" \
+  --key-type sr25519 \
   --purpose payment \
-  --index 2 \
   --format text
 ```
 
@@ -159,15 +185,15 @@ Derivation Path: //midnight//payment//2
 
 **Command**:
 ```bash
-midnight-cli key inspect ./scratch/keys-batch/governance-0.vkey
+midnight-cli key inspect ./scratch/keys-batch/payment-0.vkey
 ```
 
 **Expected Output**:
 ```
-Key Type:        GovernanceVerificationKeyMidnight_sr25519
-Description:     Midnight governance key (public)
-Public Key:      0xa776062785aa50cf7b25b84758d36ea54a619b64535a087e6115740d4465f00
-CBOR Hex:        5820a776062785aa50cf7b25b84758d36ea54a619b64535a087e6115740d4465f00
+Key Type:        PaymentVerificationKeyMidnight_sr25519
+Description:     Midnight payment key (public)
+Public Key:      0x...
+CBOR Hex:        5820...
 ```
 
 ### Scenario 5: Multiple Key Types
@@ -176,39 +202,37 @@ CBOR Hex:        5820a776062785aa50cf7b25b84758d36ea54a619b64535a087e6115740d446
 
 **Commands**:
 ```bash
-# Governance (sr25519)
+# Governance (sr25519) - no index, one per wallet
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose governance \
-  --index 0 \
   --output ./scratch/keys/
 
-# Payment (sr25519)
+# Payment (sr25519) - index required, multiple per wallet
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose payment \
   --index 0 \
   --output ./scratch/keys/
 
-# Finality (ed25519)
+# Finality (ed25519) - no index, one per wallet
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose finality \
-  --index 0 \
   --output ./scratch/keys/
 ```
 
 **Expected Files**:
-- `governance-0.skey` / `governance-0.vkey` (type: `GovernanceSigningKeyMidnight_sr25519` / `GovernanceVerificationKeyMidnight_sr25519`)
+- `governance.skey` / `governance.vkey` (type: `GovernanceSigningKeyMidnight_sr25519` / `GovernanceVerificationKeyMidnight_sr25519`)
 - `payment-0.skey` / `payment-0.vkey` (type: `PaymentSigningKeyMidnight_sr25519` / `PaymentVerificationKeyMidnight_sr25519`)
-- `finality-0.skey` / `finality-0.vkey` (type: `FinalitySigningKeyMidnight_ed25519` / `FinalityVerificationKeyMidnight_ed25519`)
+- `finality.skey` / `finality.vkey` (type: `FinalitySigningKeyMidnight_ed25519` / `FinalityVerificationKeyMidnight_ed25519`)
 
 **Validation**:
 ```bash
 # Check each key type
-jq '.type' ./scratch/keys/governance-0.skey
+jq '.type' ./scratch/keys/governance.skey
 jq '.type' ./scratch/keys/payment-0.skey
-jq '.type' ./scratch/keys/finality-0.skey
+jq '.type' ./scratch/keys/finality.skey
 ```
 
 ### Scenario 6: Witness Creation from Key File
@@ -285,7 +309,6 @@ midnight-cli witness create \
   --payload ./payload.txt \
   --mnemonic-file mnemonic.txt \
   --purpose governance \
-  --index 0 \
   --output ./witness-simple.json \
   --description "Runtime upgrade proposal #42" \
   --yes
@@ -293,7 +316,7 @@ midnight-cli witness create \
 
 **Expected Output**:
 - File created: `witness-simple.json`
-- Derivation path auto-constructed: `//midnight//governance//0`
+- Derivation path auto-constructed: `//midnight//governance` (no index - one per wallet)
 - Key type auto-selected: `sr25519` (for governance)
 
 **Command** (Explicit Path - For Advanced Use):
@@ -301,8 +324,8 @@ midnight-cli witness create \
 midnight-cli witness create \
   --payload ./payload.txt \
   --mnemonic-file mnemonic.txt \
-  --derivation-path "//midnight//governance//42" \
-  --purpose governance \
+  --derivation-path "//midnight//payment//42" \
+  --purpose payment \
   --output ./witness-explicit.json \
   --description "Custom derivation path" \
   --yes
@@ -311,6 +334,7 @@ midnight-cli witness create \
 **Expected Output**:
 - Uses the explicit derivation path provided
 - Still requires `--purpose` for metadata
+- Note: Only payment keys support custom index values
 
 **Key Features**:
 - Auto-constructs standard derivation paths from purpose and index
@@ -337,7 +361,6 @@ midnight-cli witness create \
   --payload ./payload.txt \
   --mnemonic-file mnemonic.txt \
   --purpose finality \
-  --index 3 \
   --output ./witness-finality.json \
   --yes
 ```
@@ -346,13 +369,13 @@ midnight-cli witness create \
 ```bash
 # Check auto-constructed derivation paths
 jq '.signature.signer.derivationPath' witness-simple.json
-# Output: "//midnight//governance//0"
+# Output: "//midnight//governance"
 
 jq '.signature.signer.derivationPath' witness-payment.json
 # Output: "//midnight//payment//5"
 
 jq '.signature.signer.derivationPath' witness-finality.json
-# Output: "//midnight//finality//3"
+# Output: "//midnight//finality"
 
 # Verify key types
 jq '.signature.type' witness-simple.json    # "sr25519"
@@ -416,7 +439,6 @@ echo "legal winner thank year wave sausage worth useful legal winner thank year 
 midnight-cli key generate \
   --mnemonic-file ./scratch/mnemonic.txt.asc \
   --purpose governance \
-  --index 0 \
   --output ./scratch/keys/
 ```
 
@@ -436,25 +458,23 @@ midnight-cli key generate \
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose governance \
-  --index 5 \
   --output ./scratch/test1/
 
 # Generate same key second time
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose governance \
-  --index 5 \
   --output ./scratch/test2/
 ```
 
 **Validation**:
 ```bash
-diff ./scratch/test1/governance-5.vkey ./scratch/test2/governance-5.vkey
+diff ./scratch/test1/governance.vkey ./scratch/test2/governance.vkey
 # Should show no differences (exit code 0)
 
 # Verify public keys match
-jq -r '.cborHex' ./scratch/test1/governance-5.vkey
-jq -r '.cborHex' ./scratch/test2/governance-5.vkey
+jq -r '.cborHex' ./scratch/test1/governance.vkey
+jq -r '.cborHex' ./scratch/test2/governance.vkey
 # Should output identical CBOR hex strings
 ```
 
@@ -484,20 +504,23 @@ Run all test scenarios and record results:
 ### Key Management
 
 ```bash
-# Generate keys with new mnemonic
-midnight-cli key generate --purpose <governance|payment|finality> --index <N> --output <dir>
+# Generate governance or finality key (no index - one per wallet)
+midnight-cli key generate --purpose <governance|finality> --output <dir>
+
+# Generate payment key (index required - multiple per wallet)
+midnight-cli key generate --purpose payment --index <N> --output <dir>
 
 # Generate keys from existing mnemonic (CLI)
-midnight-cli key generate --mnemonic "<24-word phrase>" --purpose <type> --index <N> --output <dir>
+midnight-cli key generate --mnemonic "<24-word phrase>" --purpose <type> [--index <N>] --output <dir>
 
 # Generate keys from mnemonic file
-midnight-cli key generate --mnemonic-file <path> --purpose <type> --index <N> --output <dir>
+midnight-cli key generate --mnemonic-file <path> --purpose <type> [--index <N>] --output <dir>
 
-# Batch generate multiple keys
-midnight-cli key batch --mnemonic "<phrase>" --purpose <type> --start <N> --count <M> --output <dir>
+# Batch generate multiple payment keys
+midnight-cli key batch --mnemonic "<phrase>" --purposes payment --indices 0,1,2 --output <dir>
 
 # Derive key on-demand (no file output)
-midnight-cli key derive --mnemonic "<phrase>" --purpose <type> --index <N> --format <json|text>
+midnight-cli key derive --mnemonic "<phrase>" --derivation <path> --key-type <sr25519|ed25519> --purpose <type> --format <json|text>
 
 # Inspect key file
 midnight-cli key inspect <path-to-key-file>
@@ -514,11 +537,20 @@ midnight-cli witness create \
   [--description <text>] \
   [--yes]
 
-# Create witness from mnemonic (simplified - auto-derive)
+# Create witness from mnemonic - governance/finality (no index)
 midnight-cli witness create \
   --payload <file> \
   --mnemonic-file <path-to-mnemonic> \
-  --purpose <governance|payment|finality> \
+  --purpose <governance|finality> \
+  --output <path> \
+  [--description <text>] \
+  [--yes]
+
+# Create witness from mnemonic - payment (index required)
+midnight-cli witness create \
+  --payload <file> \
+  --mnemonic-file <path-to-mnemonic> \
+  --purpose payment \
   --index <N> \
   --output <path> \
   [--description <text>] \
@@ -556,19 +588,19 @@ midnight-cli witness verify \
 **Use Case**: Generate keys offline, store files securely, use files later for signing
 
 ```bash
-# Step 1: Generate mnemonic (offline, air-gapped machine)
-midnight-cli key generate --purpose governance --index 0 --output /secure/keys/
+# Step 1: Generate mnemonic and governance key (offline, air-gapped machine)
+midnight-cli key generate --purpose governance --output /secure/keys/
 # Save the mnemonic phrase in secure cold storage
 
-# Step 2: Generate batch of keys for future use
+# Step 2: Generate batch of payment keys for future use
 midnight-cli key batch --mnemonic-file /secure/mnemonic.txt.asc \
-  --purpose governance --start 0 --count 10 --output /secure/keys/
+  --purposes payment --indices 0,1,2,3,4,5,6,7,8,9 --output /secure/keys/
 
 # Step 3: Later, when signing is needed (air-gapped machine)
-# Transfer payload hash to air-gapped machine
+# Transfer payload to air-gapped machine
 midnight-cli witness create \
-  --payload-hash "0x..." \
-  --key-file /secure/keys/governance-5.skey \
+  --payload proposal.txt \
+  --key-file /secure/keys/governance.skey \
   --output /secure/witness.json \
   --description "Governance action #42"
 
@@ -591,13 +623,12 @@ midnight-cli witness create \
   --payload ./proposal.txt \
   --mnemonic-file midnight.mnemonic \
   --purpose governance \
-  --index 7 \
   --output witness.json \
   --description "Governance action #42" \
   --yes
 
 # The tool automatically:
-# - Constructs derivation path: //midnight//governance//7
+# - Constructs derivation path: //midnight//governance (no index - one per wallet)
 # - Selects key type: sr25519 (for governance)
 # - Derives the key on-demand
 # - Signs the payload
@@ -620,7 +651,6 @@ midnight-cli witness create \
   --payload ./block.bin \
   --mnemonic-file midnight.mnemonic \
   --purpose finality \
-  --index 0 \
   --output witness-finality.json \
   --yes
 ```
@@ -728,7 +758,7 @@ When using GPG-encrypted files, the tool will:
     "signer": {
       "publicKey": "0x...",
       "ss58Address": "5...",
-      "derivationPath": "//midnight//governance//0"  // null for file-based
+      "derivationPath": "//midnight//governance"  // null for file-based keys
     }
   },
   "metadata": {
@@ -743,7 +773,7 @@ When using GPG-encrypted files, the tool will:
 
 ### Issue: "Invalid SURI format"
 **Cause**: Derivation path doesn't match expected format
-**Solution**: Use standard paths: `//midnight//governance//0`, `//midnight//payment//0`, or `//midnight//finality//0`
+**Solution**: Use standard paths: `//midnight//governance`, `//midnight//payment//{index}`, or `//midnight//finality`
 
 ### Issue: "Unsupported derivation for key type ed25519"
 **Cause**: Trying to use soft derivation (`/`) with ed25519 keys

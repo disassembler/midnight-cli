@@ -1,6 +1,6 @@
 use crate::crypto::{generate_mnemonic, Ed25519, Sr25519, SuriParser};
 use crate::domain::{
-    DomainResult, KeyMaterial, MidnightKeyPath, KeyPurpose, KeyTypeId,
+    DomainResult, KeyMaterial, KeyPurpose, KeyTypeId,
 };
 use crate::storage::{KeyReader, KeyWriter};
 use secrecy::{ExposeSecret, SecretString};
@@ -13,7 +13,7 @@ impl KeyGeneration {
     /// Generate a new key with a random mnemonic
     pub fn generate_with_random_mnemonic(
         purpose: KeyPurpose,
-        index: u32,
+        index: Option<u32>,
     ) -> DomainResult<(KeyMaterial, SecretString)> {
         let mnemonic = generate_mnemonic()?;
         let key_material = Self::derive_from_mnemonic(
@@ -29,7 +29,7 @@ impl KeyGeneration {
     pub fn generate_from_mnemonic(
         mnemonic: &str,
         purpose: KeyPurpose,
-        index: u32,
+        index: Option<u32>,
     ) -> DomainResult<KeyMaterial> {
         Self::derive_from_mnemonic(mnemonic, purpose, index)
     }
@@ -39,7 +39,7 @@ impl KeyGeneration {
     pub fn generate_from_mnemonic_file(
         mnemonic_file: &Path,
         purpose: KeyPurpose,
-        index: u32,
+        index: Option<u32>,
     ) -> DomainResult<KeyMaterial> {
         let mnemonic = KeyReader::read_mnemonic_from_file(mnemonic_file)?;
         Self::derive_from_mnemonic(mnemonic.expose_secret(), purpose, index)
@@ -67,11 +67,29 @@ impl KeyGeneration {
     fn derive_from_mnemonic(
         mnemonic: &str,
         purpose: KeyPurpose,
-        index: u32,
+        index: Option<u32>,
     ) -> DomainResult<KeyMaterial> {
-        let path = MidnightKeyPath::from_purpose(purpose, index);
-        let key_type = path.key_type();
-        let derivation_path = path.to_string_path();
+        let key_type = purpose.default_key_type();
+
+        // Construct derivation path based on purpose:
+        // - Governance/Finality: //midnight//{purpose} (no index - one per wallet)
+        // - Payment: //midnight//payment//{index} (index required - multiple per wallet)
+        let derivation_path = match purpose {
+            KeyPurpose::Governance | KeyPurpose::Finality => {
+                if index.is_some() {
+                    return Err(crate::domain::DomainError::InvalidPayload(
+                        format!("{} keys should not have an index (one per wallet)", purpose.as_str())
+                    ));
+                }
+                format!("//midnight//{}", purpose.as_str().to_lowercase())
+            }
+            KeyPurpose::Payment => {
+                let idx = index.ok_or_else(|| crate::domain::DomainError::InvalidPayload(
+                    "Payment keys require an --index (multiple per wallet)".to_string()
+                ))?;
+                format!("//midnight//payment//{}", idx)
+            }
+        };
 
         let suri_str = format!("{}{}", mnemonic, derivation_path);
 
@@ -106,7 +124,7 @@ impl KeyGeneration {
         output_dir: &Path,
         filename: Option<String>,
     ) -> DomainResult<(PathBuf, PathBuf)> {
-        let key_material = Self::derive_from_mnemonic(mnemonic, purpose, index)?;
+        let key_material = Self::derive_from_mnemonic(mnemonic, purpose, Some(index))?;
 
         let base_filename = filename.unwrap_or_else(|| {
             KeyWriter::default_filename(&key_material, Some(index))
@@ -126,7 +144,7 @@ impl KeyGeneration {
 
         for &purpose in purposes {
             for &index in indices {
-                let key_material = Self::derive_from_mnemonic(mnemonic, purpose, index)?;
+                let key_material = Self::derive_from_mnemonic(mnemonic, purpose, Some(index))?;
                 let filename = KeyWriter::default_filename(&key_material, Some(index));
 
                 let (skey_path, vkey_path) =
