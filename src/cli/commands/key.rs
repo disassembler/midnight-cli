@@ -1,5 +1,6 @@
 use crate::application::{KeyDerivation, KeyGeneration};
 use crate::cli::output::{print_key_output, OutputFormat};
+use crate::crypto::{Ed25519, Sr25519};
 use crate::domain::{KeyPurpose, KeyTypeId};
 use crate::storage::{CardanoKeyFile, KeyReader};
 use anyhow::Result;
@@ -24,9 +25,9 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub purpose: String,
 
-    /// Key index
-    #[arg(long, default_value = "0")]
-    pub index: u32,
+    /// Key index (optional, defaults to none for governance)
+    #[arg(long)]
+    pub index: Option<u32>,
 
     /// Mnemonic phrase (or file path)
     #[arg(long)]
@@ -78,6 +79,10 @@ pub struct DeriveArgs {
     /// Output format (json, text)
     #[arg(long, default_value = "json")]
     pub format: String,
+
+    /// Network format for SS58 address (substrate, westend)
+    #[arg(long, default_value = "substrate")]
+    pub network: String,
 
     /// Show secret key
     #[arg(long)]
@@ -146,7 +151,7 @@ fn handle_generate(args: GenerateArgs) -> Result<()> {
             &key,
             &args.output_dir,
             &args.filename.unwrap_or_else(|| {
-                crate::storage::KeyWriter::default_filename(&key, Some(args.index))
+                crate::storage::KeyWriter::default_filename(&key, args.index)
             }),
         )?;
 
@@ -181,7 +186,7 @@ fn handle_generate(args: GenerateArgs) -> Result<()> {
         &key,
         &args.output_dir,
         &args.filename.unwrap_or_else(|| {
-            crate::storage::KeyWriter::default_filename(&key, Some(args.index))
+            crate::storage::KeyWriter::default_filename(&key, args.index)
         }),
     )?;
 
@@ -198,7 +203,7 @@ fn handle_derive(args: DeriveArgs) -> Result<()> {
     let format = OutputFormat::from_str(&args.format)
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    let key = if let Some(ref file) = args.mnemonic_file {
+    let mut key = if let Some(ref file) = args.mnemonic_file {
         KeyDerivation::derive_from_mnemonic_file(file, &args.derivation, key_type, purpose)?
     } else if let Some(ref phrase) = args.mnemonic {
         let mnemonic = KeyReader::read_mnemonic(phrase)?;
@@ -213,6 +218,29 @@ fn handle_derive(args: DeriveArgs) -> Result<()> {
             "Must provide either --mnemonic or --mnemonic-file"
         ));
     };
+
+    // Re-encode SS58 address with custom network if needed
+    if args.network != "substrate" {
+        let new_address = match key_type {
+            KeyTypeId::Sr25519 => {
+                use sp_core::sr25519::Public;
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&key.public_key);
+                let public = Public::from_raw(bytes);
+                Sr25519::to_ss58_address_with_network(&public, &args.network)
+                    .map_err(|e| anyhow::anyhow!(e))?
+            },
+            KeyTypeId::Ed25519 => {
+                use sp_core::ed25519::Public;
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&key.public_key);
+                let public = Public::from_raw(bytes);
+                Ed25519::to_ss58_address_with_network(&public, &args.network)
+                    .map_err(|e| anyhow::anyhow!(e))?
+            },
+        };
+        key.metadata.ss58_address = Some(new_address);
+    }
 
     print_key_output(&key, format);
 

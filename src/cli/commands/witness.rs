@@ -101,17 +101,33 @@ fn handle_create(args: CreateArgs) -> Result<()> {
             let key_type = purpose.default_key_type();
             (path, key_type, purpose)
         } else {
-            // Auto-construct derivation path from purpose and index
+            // Auto-construct derivation path from purpose and optional index
             let purpose_str = args.purpose.ok_or_else(|| {
                 anyhow::anyhow!("--purpose required when using mnemonic without --derivation-path")
-            })?;
-            let index = args.index.ok_or_else(|| {
-                anyhow::anyhow!("--index required when using mnemonic without --derivation-path")
             })?;
 
             let purpose = KeyPurpose::from_str(&purpose_str)?;
             let key_type = purpose.default_key_type();
-            let path = format!("//midnight//{}//{}",purpose_str.to_lowercase(), index);
+
+            // Construct path based on purpose:
+            // - Governance/Finality: //midnight//{purpose} (no index - one per wallet)
+            // - Payment: //midnight//payment//{index} (index required - multiple per wallet)
+            let path = match purpose {
+                KeyPurpose::Governance | KeyPurpose::Finality => {
+                    if args.index.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "{} keys should not have an index (one per wallet)", purpose.as_str()
+                        ));
+                    }
+                    format!("//midnight//{}", purpose_str.to_lowercase())
+                }
+                KeyPurpose::Payment => {
+                    let index = args.index.ok_or_else(|| {
+                        anyhow::anyhow!("Payment keys require --index (multiple per wallet)")
+                    })?;
+                    format!("//midnight//payment//{}", index)
+                }
+            };
 
             (path, key_type, purpose)
         };

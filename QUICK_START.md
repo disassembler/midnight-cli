@@ -36,7 +36,6 @@ midnight-cli witness create \
   --payload proposal.txt \
   --mnemonic-file midnight.mnemonic \
   --purpose governance \
-  --index 0 \
   --output witness.json \
   --yes
 ```
@@ -58,7 +57,6 @@ midnight-cli witness create \
   --payload block.bin \
   --mnemonic-file midnight.mnemonic \
   --purpose finality \
-  --index 0 \
   --output witness-finality.json \
   --yes
 ```
@@ -83,7 +81,7 @@ midnight-cli witness verify \
 midnight-cli witness create \
   --payload-hash "0x688ce9ce936cf4555e3054a9b8308fe63ff68350b940d1db1236353e97926e1d" \
   --mnemonic "24 words here..." \
-  --derivation-path "//midnight//governance//0" \
+  --derivation-path "//midnight//payment//0" \
   --key-type sr25519 \
   --output witness.json
 ```
@@ -95,16 +93,16 @@ midnight-cli witness create \
   --payload proposal.txt \
   --mnemonic-file midnight.mnemonic \
   --purpose governance \
-  --index 0 \
   --output witness.json \
   --yes
 ```
 
 **What changed:**
-- ✅ Use `--purpose` and `--index` instead of full `--derivation-path`
+- ✅ Use `--purpose` (and `--index` for payment keys only) instead of full `--derivation-path`
 - ✅ No need to specify `--key-type` (auto-selected from purpose)
 - ✅ Use `--payload <file>` instead of manually computing `--payload-hash`
 - ✅ Use `--mnemonic-file` for cleaner, more secure mnemonic handling
+- ✅ Governance and finality keys have no index (one per wallet), only payment keys use `--index`
 
 ## Key Generation Workflow
 
@@ -114,35 +112,34 @@ midnight-cli witness create \
 # Generate from new mnemonic (will be displayed - save securely!)
 midnight-cli key generate \
   --purpose governance \
-  --index 0 \
   --output ./keys
 
 # Generate from existing mnemonic file
 midnight-cli key generate \
   --purpose governance \
-  --index 0 \
   --mnemonic-file midnight.mnemonic \
   --output ./keys
 
-# Batch generate multiple keys at once
+# Batch generate payment keys (multiple per wallet)
 midnight-cli key batch \
   --mnemonic-file midnight.mnemonic \
-  --purpose governance \
-  --start 0 \
-  --count 10 \
+  --purposes payment \
+  --indices 0,1,2,3,4,5,6,7,8,9 \
   --output ./keys
 ```
 
 This creates paired files:
-- `governance-0.skey` (private key - keep secure!)
-- `governance-0.vkey` (public key - safe to share)
+- `governance.skey` (private key - keep secure!)
+- `governance.vkey` (public key - safe to share)
+
+**Note:** Governance and finality keys have no index suffix because each wallet should have exactly one of each. Only payment keys use numbered files (`payment-0.skey`, `payment-1.skey`, etc.)
 
 ### Sign with Pre-generated Key
 
 ```bash
 midnight-cli witness create \
   --payload proposal.txt \
-  --key-file ./keys/governance-0.skey \
+  --key-file ./keys/governance.skey \
   --output witness.json \
   --yes
 ```
@@ -162,13 +159,12 @@ legal winner thank year wave sausage worth useful legal winner thank year wave s
 midnight-cli witness create \
   --mnemonic-file midnight.mnemonic.gpg \
   --purpose governance \
-  --index 0 \
   ...
 ```
 
 ### Key Files (Cardano Format)
 
-**Signing key** (`governance-0.skey`):
+**Signing key** (`governance.skey`):
 ```json
 {
   "type": "GovernanceSigningKeyMidnight_sr25519",
@@ -177,7 +173,7 @@ midnight-cli witness create \
 }
 ```
 
-**Verification key** (`governance-0.vkey`):
+**Verification key** (`governance.vkey`):
 ```json
 {
   "type": "GovernanceVerificationKeyMidnight_sr25519",
@@ -202,7 +198,7 @@ midnight-cli witness create \
     "signer": {
       "publicKey": "0x...",
       "ss58Address": "5...",
-      "derivationPath": "//midnight//governance//0"
+      "derivationPath": "//midnight//governance"
     }
   },
   "metadata": {
@@ -215,11 +211,15 @@ midnight-cli witness create \
 
 ## Key Purposes and Types
 
-| Purpose | Key Type | Derivation Path | Use Case |
-|---------|----------|-----------------|----------|
-| `governance` | sr25519 | `//midnight//governance//{index}` | Governance proposals, runtime upgrades |
-| `payment` | sr25519 | `//midnight//payment//{index}` | Payment transactions |
-| `finality` | ed25519 | `//midnight//finality//{index}` | Consensus finality signatures |
+| Purpose | Key Type | Derivation Path | Index | Use Case |
+|---------|----------|-----------------|-------|----------|
+| `governance` | sr25519 | `//midnight//governance` | None (one per wallet) | Governance proposals, runtime upgrades |
+| `payment` | sr25519 | `//midnight//payment//{index}` | Required (multiple per wallet) | Payment transactions |
+| `finality` | ed25519 | `//midnight//finality` | None (one per wallet) | Consensus finality signatures |
+
+**Security Policy:**
+- Each wallet holds exactly **one** governance key and **one** finality key (no index)
+- Each wallet can hold **multiple** payment keys (index required)
 
 The tool automatically selects the correct key type based on the purpose you specify.
 
@@ -247,7 +247,6 @@ The tool automatically selects the correct key type based on the purpose you spe
      --payload proposal.txt \
      --mnemonic-file midnight.mnemonic.gpg \
      --purpose governance \
-     --index 0 \
      --output witness.json
    # Review payload hash on screen!
    ```
@@ -282,10 +281,20 @@ midnight-cli witness create \
 
 View derived key without saving to disk:
 ```bash
+# Governance key (no index)
 midnight-cli key derive \
   --mnemonic-file midnight.mnemonic \
+  --derivation "//midnight//governance" \
+  --key-type sr25519 \
   --purpose governance \
-  --index 0 \
+  --format json
+
+# Payment key (with index)
+midnight-cli key derive \
+  --mnemonic-file midnight.mnemonic \
+  --derivation "//midnight//payment//5" \
+  --key-type sr25519 \
+  --purpose payment \
   --format json
 ```
 
@@ -296,14 +305,14 @@ Output:
   "keyPurpose": "Governance",
   "publicKey": "0x...",
   "ss58Address": "5...",
-  "derivationPath": "//midnight//governance//0"
+  "derivationPath": "//midnight//governance"
 }
 ```
 
 ### Key File Inspection
 
 ```bash
-midnight-cli key inspect governance-0.skey
+midnight-cli key inspect governance.skey
 ```
 
 Output:
