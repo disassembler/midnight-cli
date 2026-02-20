@@ -7,7 +7,11 @@ mod crypto;
 mod domain;
 mod storage;
 
-use cli::{handle_key_command, handle_witness_command, KeyCommands, WitnessCommands};
+use cli::{
+    handle_key_command, handle_witness_command, handle_validator_command,
+    handle_governance_command, handle_genesis_command, KeyCommands, WitnessCommands,
+    ValidatorCommands, GovernanceCommands, GenesisCommands,
+};
 
 #[derive(Parser)]
 #[command(name = "midnight-cli")]
@@ -27,6 +31,18 @@ enum Commands {
     /// Witness (signature) operations
     #[command(subcommand)]
     Witness(WitnessCommands),
+
+    /// Validator key operations
+    #[command(subcommand)]
+    Validator(ValidatorCommands),
+
+    /// Governance key operations
+    #[command(subcommand)]
+    Governance(GovernanceCommands),
+
+    /// Genesis configuration operations
+    #[command(subcommand)]
+    Genesis(GenesisCommands),
 }
 
 fn main() -> Result<()> {
@@ -35,5 +51,8 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Key(key_cmd) => handle_key_command(key_cmd),
         Commands::Witness(witness_cmd) => handle_witness_command(witness_cmd),
+        Commands::Validator(validator_cmd) => handle_validator_command(validator_cmd),
+        Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd),
+        Commands::Genesis(genesis_cmd) => handle_genesis_command(genesis_cmd),
     }
 }
