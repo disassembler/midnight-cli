@@ -152,6 +152,34 @@ midnight-cli witness verify \
   --payload <payload-file>
 ```
 
+### Network Setup (SanchoNight / Federated Networks)
+
+```bash
+# Generate validator keys for node operator
+midnight-cli validator generate \
+  [--mnemonic-file <path>] \
+  --output validator-keys.json \
+  [--write-key-files] \
+  [--key-files-dir <dir>]
+
+# Outputs: node key (ed25519), aura key (sr25519), grandpa key (ed25519)
+
+# Generate governance keys for TA/Council member
+midnight-cli governance generate \
+  [--mnemonic-file <path>] \
+  --output governance-key.json \
+  [--write-key-files] \
+  [--key-files-dir <dir>]
+
+# Create genesis configuration from aggregated keys
+midnight-cli genesis init \
+  --validators <validators.json> \
+  --governance <governance.json> \
+  [--night-policy-id <hex>] \
+  [--chain-id <name>] \
+  --output genesis.json
+```
+
 ## Workflows
 
 ### Pre-Derive Workflow (Cold Storage)
@@ -180,6 +208,35 @@ midnight-cli witness create \
   --yes
 
 # Step 4: Transfer witness.json to online machine for submission
+```
+
+### Federated Network Setup (SanchoNight)
+
+**Use Case**: Bootstrap a federated Midnight network with multiple operators
+
+```bash
+# Operator 1: Generate validator keys independently
+midnight-cli validator generate --output operator1-validator.json
+
+# Operator 2: Generate validator keys independently
+midnight-cli validator generate --output operator2-validator.json
+
+# TA Member 1: Generate governance key
+midnight-cli governance generate --output ta1-governance.json
+
+# TA Member 2: Generate governance key
+midnight-cli governance generate --output ta2-governance.json
+
+# Coordinator: Aggregate all keys into genesis
+# (After receiving JSON files from all operators and TA members)
+midnight-cli genesis init \
+  --validators operators-aggregated.json \
+  --governance governance-aggregated.json \
+  --night-policy-id <policy-id-from-cardano> \
+  --chain-id sanchonight \
+  --output genesis.json
+
+# Use genesis.json to configure midnight-node for network launch
 ```
 
 ### On-Demand Workflow (Dynamic Derivation)
