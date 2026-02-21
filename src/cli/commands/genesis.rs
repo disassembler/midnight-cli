@@ -16,9 +16,13 @@ pub struct GenesisInitArgs {
     #[arg(long = "validator")]
     pub validators: Vec<PathBuf>,
 
-    /// Path to individual governance JSON file (can be specified multiple times)
-    #[arg(long = "governance")]
-    pub governances: Vec<PathBuf>,
+    /// Path to Technical Advisory (TA) governance key JSON file (can be specified multiple times)
+    #[arg(long = "ta")]
+    pub ta_members: Vec<PathBuf>,
+
+    /// Path to Council governance key JSON file (can be specified multiple times)
+    #[arg(long = "council")]
+    pub council_members: Vec<PathBuf>,
 
     /// Chain ID for the network
     #[arg(long, default_value = "sanchonight")]
@@ -93,9 +97,14 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
         anyhow::bail!("At least one validator must be specified (use --validator <file>)");
     }
 
-    // Ensure we have at least one governance key
-    if args.governances.is_empty() {
-        anyhow::bail!("At least one governance key must be specified (use --governance <file>)");
+    // Ensure we have at least one TA member
+    if args.ta_members.is_empty() {
+        anyhow::bail!("At least one TA member must be specified (use --ta <file>)");
+    }
+
+    // Ensure we have at least one Council member
+    if args.council_members.is_empty() {
+        anyhow::bail!("At least one Council member must be specified (use --council <file>)");
     }
 
     // Read and parse all validator files
@@ -110,16 +119,28 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
         validators.push(validator);
     }
 
-    // Read and parse all governance files
-    let mut governance_keys: Vec<GovernanceKeyInput> = Vec::new();
-    for governance_path in &args.governances {
-        let governance_json = fs::read_to_string(governance_path)
-            .with_context(|| format!("Failed to read governance file: {}", governance_path.display()))?;
+    // Read and parse all TA member files
+    let mut ta_keys: Vec<GovernanceKeyInput> = Vec::new();
+    for ta_path in &args.ta_members {
+        let ta_json = fs::read_to_string(ta_path)
+            .with_context(|| format!("Failed to read TA governance file: {}", ta_path.display()))?;
 
-        let governance_key: GovernanceKeyInput = serde_json::from_str(&governance_json)
-            .with_context(|| format!("Failed to parse governance JSON from: {}", governance_path.display()))?;
+        let ta_key: GovernanceKeyInput = serde_json::from_str(&ta_json)
+            .with_context(|| format!("Failed to parse TA governance JSON from: {}", ta_path.display()))?;
 
-        governance_keys.push(governance_key);
+        ta_keys.push(ta_key);
+    }
+
+    // Read and parse all Council member files
+    let mut council_keys: Vec<GovernanceKeyInput> = Vec::new();
+    for council_path in &args.council_members {
+        let council_json = fs::read_to_string(council_path)
+            .with_context(|| format!("Failed to read Council governance file: {}", council_path.display()))?;
+
+        let council_key: GovernanceKeyInput = serde_json::from_str(&council_json)
+            .with_context(|| format!("Failed to parse Council governance JSON from: {}", council_path.display()))?;
+
+        council_keys.push(council_key);
     }
 
     // Build genesis config
@@ -132,7 +153,12 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
         })
         .collect();
 
-    let governance_addresses: Vec<String> = governance_keys
+    let ta_addresses: Vec<String> = ta_keys
+        .iter()
+        .map(|g| g.ss58_address.clone())
+        .collect();
+
+    let council_addresses: Vec<String> = council_keys
         .iter()
         .map(|g| g.ss58_address.clone())
         .collect();
@@ -145,8 +171,8 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
         chain_id: args.chain_id.clone(),
         validators: validator_configs,
         governance: GovernanceConfig {
-            council: governance_addresses.clone(),
-            technical_committee: governance_addresses,
+            council: council_addresses,
+            technical_committee: ta_addresses,
         },
         night_token,
     };
@@ -156,11 +182,12 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
     fs::write(&args.output, genesis_json)?;
 
     println!("✓ Genesis configuration created:");
-    println!("  Chain ID:   {}", args.chain_id);
-    println!("  Validators: {}", genesis_config.validators.len());
-    println!("  Governance: {}", genesis_config.governance.council.len());
+    println!("  Chain ID:              {}", args.chain_id);
+    println!("  Validators:            {}", genesis_config.validators.len());
+    println!("  Technical Committee:   {}", genesis_config.governance.technical_committee.len());
+    println!("  Council:               {}", genesis_config.governance.council.len());
     if let Some(ref night) = genesis_config.night_token {
-        println!("  $NIGHT:     {}", night.policy_id);
+        println!("  $NIGHT:                {}", night.policy_id);
     }
     println!();
     println!("✓ Genesis written to: {}", args.output.display());

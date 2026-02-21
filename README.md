@@ -175,8 +175,10 @@ midnight-cli governance generate \
 midnight-cli genesis init \
   --validator <validator1.json> \
   --validator <validator2.json> \
-  --governance <governance1.json> \
-  --governance <governance2.json> \
+  --ta <ta1.json> \
+  --ta <ta2.json> \
+  --council <council1.json> \
+  --council <council2.json> \
   [--night-policy-id <hex>] \
   [--chain-id <name>] \
   --output genesis.json
@@ -230,12 +232,15 @@ midnight-cli governance generate --output ta1-governance.json
 midnight-cli governance generate --output ta2-governance.json
 
 # Coordinator: Create genesis from individual key files
-# (After receiving JSON files from all operators and TA members)
+# (After receiving JSON files from all operators, TA, and Council members)
 midnight-cli genesis init \
   --validator operator1-validator.json \
   --validator operator2-validator.json \
-  --governance ta1-governance.json \
-  --governance ta2-governance.json \
+  --ta ta1-governance.json \
+  --ta ta2-governance.json \
+  --council council1-governance.json \
+  --council council2-governance.json \
+  --council council3-governance.json \
   --night-policy-id <policy-id-from-cardano> \
   --chain-id sanchonight \
   --output genesis.json
