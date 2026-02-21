@@ -11,6 +11,8 @@ use std::path::PathBuf;
 pub enum ValidatorCommands {
     /// Generate validator keys for midnight-node operator
     Generate(ValidatorGenerateArgs),
+    /// Export validator seeds for midnight-node
+    ExportSeeds(ExportSeedsArgs),
 }
 
 #[derive(Args)]
@@ -36,6 +38,21 @@ pub struct ValidatorGenerateArgs {
     pub key_files_dir: PathBuf,
 }
 
+#[derive(Args)]
+pub struct ExportSeedsArgs {
+    /// Mnemonic phrase (or file path)
+    #[arg(long)]
+    pub mnemonic: Option<String>,
+
+    /// Mnemonic file path (supports GPG)
+    #[arg(long)]
+    pub mnemonic_file: Option<PathBuf>,
+
+    /// Output directory for seed files
+    #[arg(long, short = 'o', default_value = ".")]
+    pub output_dir: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ValidatorKeys {
     /// Node key (ed25519) - LibP2P peer identity
@@ -56,6 +73,7 @@ pub struct KeyData {
 pub fn handle_validator_command(cmd: ValidatorCommands) -> Result<()> {
     match cmd {
         ValidatorCommands::Generate(args) => handle_validator_generate(args),
+        ValidatorCommands::ExportSeeds(args) => handle_export_seeds(args),
     }
 }
 
@@ -168,6 +186,74 @@ fn handle_validator_generate(args: ValidatorGenerateArgs) -> Result<()> {
         println!("  Aura:    {}, {}", aura_skey.display(), aura_vkey.display());
         println!("  Grandpa: {}, {}", grandpa_skey.display(), grandpa_vkey.display());
     }
+
+    Ok(())
+}
+
+fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
+    use secrecy::ExposeSecret;
+    use sp_core::crypto::Pair as PairTrait;
+
+    // Get mnemonic
+    let mnemonic = if let Some(ref file) = args.mnemonic_file {
+        KeyReader::read_mnemonic_from_file(file)?
+    } else if let Some(ref phrase) = args.mnemonic {
+        KeyReader::read_mnemonic(phrase)?
+    } else {
+        anyhow::bail!("Either --mnemonic or --mnemonic-file must be specified");
+    };
+
+    let mnemonic_str = ExposeSecret::expose_secret(&mnemonic);
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&args.output_dir)?;
+
+    // Derive keys using same paths as validator generate
+    let node_suri = format!("{}//midnight//node", mnemonic_str);
+    let node_pair = Ed25519::from_suri(&node_suri)?;
+
+    let aura_suri = format!("{}//midnight//aura", mnemonic_str);
+    let aura_pair = Sr25519::from_suri(&aura_suri)?;
+
+    let grandpa_suri = format!("{}//midnight//grandpa", mnemonic_str);
+    let grandpa_pair = Ed25519::from_suri(&grandpa_suri)?;
+
+    // Extract secret keys as hex
+    let node_seed_hex = format!("0x{}", hex::encode(node_pair.to_raw_vec()));
+    let aura_seed_hex = format!("0x{}", hex::encode(aura_pair.to_raw_vec()));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(grandpa_pair.to_raw_vec()));
+
+    // Write seed files
+    let node_seed_path = args.output_dir.join("node-seed.txt");
+    let aura_seed_path = args.output_dir.join("aura-seed.txt");
+    let grandpa_seed_path = args.output_dir.join("grandpa-seed.txt");
+
+    std::fs::write(&node_seed_path, &node_seed_hex)?;
+    std::fs::write(&aura_seed_path, &aura_seed_hex)?;
+    std::fs::write(&grandpa_seed_path, &grandpa_seed_hex)?;
+
+    #[cfg(unix)]
+    {
+        // Set restrictive permissions on Unix (0o600 = owner read/write only)
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&node_seed_path, permissions.clone())?;
+        std::fs::set_permissions(&aura_seed_path, permissions.clone())?;
+        std::fs::set_permissions(&grandpa_seed_path, permissions)?;
+    }
+
+    println!("✓ Validator seed files exported:");
+    println!("  Node (ed25519):    {}", node_seed_path.display());
+    println!("  Aura (sr25519):    {}", aura_seed_path.display());
+    println!("  Grandpa (ed25519): {}", grandpa_seed_path.display());
+    println!();
+    println!("⚠️  SECURITY WARNING:");
+    println!("   - These files contain SECRET KEYS");
+    println!("   - Keep them secure and never share them");
+    println!("   - Use with midnight-node:");
+    println!("     --aura-seed-file {}", aura_seed_path.display());
+    println!("     --grandpa-seed-file {}", grandpa_seed_path.display());
+    println!("     --cross-chain-seed-file {} (if using cross-chain)", node_seed_path.display());
 
     Ok(())
 }
