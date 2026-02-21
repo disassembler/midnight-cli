@@ -12,13 +12,13 @@ pub enum GenesisCommands {
 
 #[derive(Args)]
 pub struct GenesisInitArgs {
-    /// Path to validators JSON file (from validator generate)
-    #[arg(long)]
-    pub validators: PathBuf,
+    /// Path to individual validator JSON file (can be specified multiple times)
+    #[arg(long = "validator")]
+    pub validators: Vec<PathBuf>,
 
-    /// Path to governance JSON file (from governance generate)
-    #[arg(long)]
-    pub governance: PathBuf,
+    /// Path to individual governance JSON file (can be specified multiple times)
+    #[arg(long = "governance")]
+    pub governances: Vec<PathBuf>,
 
     /// Chain ID for the network
     #[arg(long, default_value = "sanchonight")]
@@ -88,29 +88,39 @@ pub fn handle_genesis_command(cmd: GenesisCommands) -> Result<()> {
 }
 
 fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
-    // Read validators file
-    let validators_json = fs::read_to_string(&args.validators)
-        .with_context(|| format!("Failed to read validators file: {}", args.validators.display()))?;
+    // Ensure we have at least one validator
+    if args.validators.is_empty() {
+        anyhow::bail!("At least one validator must be specified (use --validator <file>)");
+    }
 
-    // Try to parse as single validator or array
-    let validators: Vec<ValidatorKeysInput> = if let Ok(single) = serde_json::from_str::<ValidatorKeysInput>(&validators_json) {
-        vec![single]
-    } else {
-        serde_json::from_str(&validators_json)
-            .with_context(|| "Failed to parse validators JSON (expected single validator object or array)")?
-    };
+    // Ensure we have at least one governance key
+    if args.governances.is_empty() {
+        anyhow::bail!("At least one governance key must be specified (use --governance <file>)");
+    }
 
-    // Read governance file
-    let governance_json = fs::read_to_string(&args.governance)
-        .with_context(|| format!("Failed to read governance file: {}", args.governance.display()))?;
+    // Read and parse all validator files
+    let mut validators: Vec<ValidatorKeysInput> = Vec::new();
+    for validator_path in &args.validators {
+        let validator_json = fs::read_to_string(validator_path)
+            .with_context(|| format!("Failed to read validator file: {}", validator_path.display()))?;
 
-    // Try to parse as single key or array
-    let governance_keys: Vec<GovernanceKeyInput> = if let Ok(single) = serde_json::from_str::<GovernanceKeyInput>(&governance_json) {
-        vec![single]
-    } else {
-        serde_json::from_str(&governance_json)
-            .with_context(|| "Failed to parse governance JSON (expected single key object or array)")?
-    };
+        let validator: ValidatorKeysInput = serde_json::from_str(&validator_json)
+            .with_context(|| format!("Failed to parse validator JSON from: {}", validator_path.display()))?;
+
+        validators.push(validator);
+    }
+
+    // Read and parse all governance files
+    let mut governance_keys: Vec<GovernanceKeyInput> = Vec::new();
+    for governance_path in &args.governances {
+        let governance_json = fs::read_to_string(governance_path)
+            .with_context(|| format!("Failed to read governance file: {}", governance_path.display()))?;
+
+        let governance_key: GovernanceKeyInput = serde_json::from_str(&governance_json)
+            .with_context(|| format!("Failed to parse governance JSON from: {}", governance_path.display()))?;
+
+        governance_keys.push(governance_key);
+    }
 
     // Build genesis config
     let validator_configs: Vec<ValidatorConfig> = validators
