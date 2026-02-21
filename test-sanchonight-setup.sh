@@ -80,11 +80,11 @@ $CLI genesis init \
   --validator validator1-keys.json \
   --validator validator2-keys.json \
   --validator validator3-keys.json \
-  --governance ta1-governance.json \
-  --governance ta2-governance.json \
-  --governance council1-governance.json \
-  --governance council2-governance.json \
-  --governance council3-governance.json \
+  --ta ta1-governance.json \
+  --ta ta2-governance.json \
+  --council council1-governance.json \
+  --council council2-governance.json \
+  --council council3-governance.json \
   --night-policy-id "$GARBAGE_POLICY_ID" \
   --chain-id sanchonight-test \
   --output genesis.json
@@ -103,20 +103,21 @@ if [ "$VALIDATOR_COUNT" != "3" ]; then
 fi
 echo "✓ Genesis has 3 validators"
 
-# Check that we have 5 governance members (2 TA + 3 Council)
+# Check that we have 3 Council members
 COUNCIL_COUNT=$(jq '.governance.council | length' genesis.json)
-if [ "$COUNCIL_COUNT" != "5" ]; then
-  echo "❌ Expected 5 council members, got $COUNCIL_COUNT"
+if [ "$COUNCIL_COUNT" != "3" ]; then
+  echo "❌ Expected 3 council members, got $COUNCIL_COUNT"
   exit 1
 fi
-echo "✓ Genesis has 5 council members"
+echo "✓ Genesis has 3 council members"
 
+# Check that we have 2 TA (Technical Committee) members
 TC_COUNT=$(jq '.governance.technical_committee | length' genesis.json)
-if [ "$TC_COUNT" != "5" ]; then
-  echo "❌ Expected 5 technical committee members, got $TC_COUNT"
+if [ "$TC_COUNT" != "2" ]; then
+  echo "❌ Expected 2 technical committee members, got $TC_COUNT"
   exit 1
 fi
-echo "✓ Genesis has 5 technical committee members"
+echo "✓ Genesis has 2 technical committee members"
 
 # Check policy ID
 POLICY_ID=$(jq -r '.night_token.policy_id' genesis.json)
