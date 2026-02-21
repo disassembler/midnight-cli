@@ -8,6 +8,8 @@ use std::path::PathBuf;
 pub enum GenesisCommands {
     /// Initialize genesis configuration from aggregated keys
     Init(GenesisInitArgs),
+    /// Generate cNight (Cardano bridge) genesis configuration
+    Cnight(CnightGenesisArgs),
 }
 
 #[derive(Args)]
@@ -35,6 +37,33 @@ pub struct GenesisInitArgs {
     /// Policy ID for the $NIGHT token (hex-encoded)
     #[arg(long)]
     pub night_policy_id: Option<String>,
+}
+
+#[derive(Args)]
+pub struct CnightGenesisArgs {
+    /// Path to genesis.json file
+    #[arg(long)]
+    pub genesis: PathBuf,
+
+    /// Mapping validator Cardano address (addr_test1...)
+    #[arg(long)]
+    pub mapping_validator: Option<String>,
+
+    /// Redemption validator Cardano address (addr_test1...)
+    #[arg(long)]
+    pub redemption_validator: Option<String>,
+
+    /// Auth token asset name (hex-encoded, empty for script hash only)
+    #[arg(long)]
+    pub auth_token_asset_name: Option<String>,
+
+    /// cNight asset name (ASCII, e.g., "SNIGHT")
+    #[arg(long)]
+    pub cnight_asset_name: Option<String>,
+
+    /// Output file for cNight genesis configuration
+    #[arg(long, default_value = "cnight-genesis.json")]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,6 +117,7 @@ pub struct GovernanceConfig {
 pub fn handle_genesis_command(cmd: GenesisCommands) -> Result<()> {
     match cmd {
         GenesisCommands::Init(args) => handle_genesis_init(args),
+        GenesisCommands::Cnight(args) => handle_cnight_genesis(args),
     }
 }
 
@@ -191,6 +221,74 @@ fn handle_genesis_init(args: GenesisInitArgs) -> Result<()> {
     }
     println!();
     println!("✓ Genesis written to: {}", args.output.display());
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CnightGenesisConfig {
+    /// Reference to the base genesis configuration
+    pub genesis_hash: Option<String>,
+
+    /// Cardano validator addresses for cNight operations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapping_validator_address: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redemption_validator_address: Option<String>,
+
+    /// Auth token configuration (policy ID is derived from mapping validator script hash)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token_asset_name: Option<String>,
+
+    /// cNight token asset name (ASCII)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cnight_asset_name: Option<String>,
+}
+
+fn handle_cnight_genesis(args: CnightGenesisArgs) -> Result<()> {
+    // Read the base genesis file to validate it exists
+    let genesis_json = fs::read_to_string(&args.genesis)
+        .with_context(|| format!("Failed to read genesis file: {}", args.genesis.display()))?;
+
+    let _genesis_config: GenesisConfig = serde_json::from_str(&genesis_json)
+        .with_context(|| "Failed to parse genesis.json")?;
+
+    // Calculate genesis hash (simple SHA256 of the file content)
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(genesis_json.as_bytes());
+    let genesis_hash = format!("{:x}", hasher.finalize());
+
+    // Build cNight genesis config
+    let cnight_config = CnightGenesisConfig {
+        genesis_hash: Some(genesis_hash.clone()),
+        mapping_validator_address: args.mapping_validator,
+        redemption_validator_address: args.redemption_validator,
+        auth_token_asset_name: args.auth_token_asset_name,
+        cnight_asset_name: args.cnight_asset_name,
+    };
+
+    // Write cNight genesis config
+    let cnight_json = serde_json::to_string_pretty(&cnight_config)?;
+    fs::write(&args.output, cnight_json)?;
+
+    println!("✓ cNight genesis configuration created:");
+    println!("  Genesis hash:    {}", genesis_hash);
+    if let Some(ref addr) = cnight_config.mapping_validator_address {
+        println!("  Mapping validator:    {}", addr);
+    }
+    if let Some(ref addr) = cnight_config.redemption_validator_address {
+        println!("  Redemption validator: {}", addr);
+    }
+    if let Some(ref name) = cnight_config.auth_token_asset_name {
+        println!("  Auth token name:      {}", if name.is_empty() { "(script hash only)" } else { name });
+    }
+    if let Some(ref name) = cnight_config.cnight_asset_name {
+        println!("  cNight asset name:    {}", name);
+    }
+    println!();
+    println!("✓ cNight genesis written to: {}", args.output.display());
 
     Ok(())
 }
