@@ -70,27 +70,21 @@ $CLI governance generate \
 
 echo "✓ Generated 3 Council governance keys"
 
-# Step 4: Coordinator aggregates validators into single JSON
+# Step 4: Coordinator creates genesis from individual key files
 echo ""
-echo "=== Step 4: Coordinator Aggregates Keys ==="
-
-# Combine validators into array
-jq -s '.' validator1-keys.json validator2-keys.json validator3-keys.json > validators-aggregated.json
-
-# Combine all governance (TA + Council) into array
-jq -s '.' ta1-governance.json ta2-governance.json council1-governance.json council2-governance.json council3-governance.json > governance-aggregated.json
-
-echo "✓ Aggregated validator and governance keys"
-
-# Step 5: Generate genesis configuration
-echo ""
-echo "=== Step 5: Generate Genesis Configuration ==="
+echo "=== Step 4: Coordinator Creates Genesis Configuration ==="
 
 GARBAGE_POLICY_ID="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 $CLI genesis init \
-  --validators validators-aggregated.json \
-  --governance governance-aggregated.json \
+  --validator validator1-keys.json \
+  --validator validator2-keys.json \
+  --validator validator3-keys.json \
+  --governance ta1-governance.json \
+  --governance ta2-governance.json \
+  --governance council1-governance.json \
+  --governance council2-governance.json \
+  --governance council3-governance.json \
   --night-policy-id "$GARBAGE_POLICY_ID" \
   --chain-id sanchonight-test \
   --output genesis.json
@@ -151,7 +145,7 @@ echo "=== Test Summary ==="
 echo "✓ 3 validators generated keys independently"
 echo "✓ 2 TA members generated governance keys"
 echo "✓ 3 Council members generated governance keys"
-echo "✓ Coordinator aggregated keys into genesis"
+echo "✓ Coordinator created genesis from individual key files"
 echo "✓ Genesis configuration validated"
 echo ""
 echo "Test artifacts saved to: $TEST_DIR"

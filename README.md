@@ -171,10 +171,12 @@ midnight-cli governance generate \
   [--write-key-files] \
   [--key-files-dir <dir>]
 
-# Create genesis configuration from aggregated keys
+# Create genesis configuration from individual key files
 midnight-cli genesis init \
-  --validators <validators.json> \
-  --governance <governance.json> \
+  --validator <validator1.json> \
+  --validator <validator2.json> \
+  --governance <governance1.json> \
+  --governance <governance2.json> \
   [--night-policy-id <hex>] \
   [--chain-id <name>] \
   --output genesis.json
@@ -227,11 +229,13 @@ midnight-cli governance generate --output ta1-governance.json
 # TA Member 2: Generate governance key
 midnight-cli governance generate --output ta2-governance.json
 
-# Coordinator: Aggregate all keys into genesis
+# Coordinator: Create genesis from individual key files
 # (After receiving JSON files from all operators and TA members)
 midnight-cli genesis init \
-  --validators operators-aggregated.json \
-  --governance governance-aggregated.json \
+  --validator operator1-validator.json \
+  --validator operator2-validator.json \
+  --governance ta1-governance.json \
+  --governance ta2-governance.json \
   --night-policy-id <policy-id-from-cardano> \
   --chain-id sanchonight \
   --output genesis.json
