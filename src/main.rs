@@ -9,8 +9,9 @@ mod storage;
 
 use cli::{
     handle_key_command, handle_witness_command, handle_validator_command,
-    handle_governance_command, handle_genesis_command, KeyCommands, WitnessCommands,
-    ValidatorCommands, GovernanceCommands, GenesisCommands,
+    handle_governance_command, handle_genesis_command, handle_mnemonic_command,
+    KeyCommands, WitnessCommands, ValidatorCommands, GovernanceCommands,
+    GenesisCommands, MnemonicCommands,
 };
 
 #[derive(Parser)]
@@ -43,6 +44,10 @@ enum Commands {
     /// Genesis configuration operations
     #[command(subcommand)]
     Genesis(GenesisCommands),
+
+    /// Mnemonic operations
+    #[command(subcommand)]
+    Mnemonic(MnemonicCommands),
 }
 
 fn main() -> Result<()> {
@@ -54,5 +59,6 @@ fn main() -> Result<()> {
         Commands::Validator(validator_cmd) => handle_validator_command(validator_cmd),
         Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd),
         Commands::Genesis(genesis_cmd) => handle_genesis_command(genesis_cmd),
+        Commands::Mnemonic(mnemonic_cmd) => handle_mnemonic_command(mnemonic_cmd),
     }
 }
