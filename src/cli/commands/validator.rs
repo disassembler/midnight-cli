@@ -13,6 +13,8 @@ pub enum ValidatorCommands {
     Generate(ValidatorGenerateArgs),
     /// Export validator seeds for midnight-node
     ExportSeeds(ExportSeedsArgs),
+    /// Export validator keystore files for midnight-node
+    ExportKeystore(ExportKeystoreArgs),
 }
 
 #[derive(Args)]
@@ -53,6 +55,21 @@ pub struct ExportSeedsArgs {
     pub output_dir: PathBuf,
 }
 
+#[derive(Args)]
+pub struct ExportKeystoreArgs {
+    /// Mnemonic phrase (or file path)
+    #[arg(long)]
+    pub mnemonic: Option<String>,
+
+    /// Mnemonic file path (supports GPG)
+    #[arg(long)]
+    pub mnemonic_file: Option<PathBuf>,
+
+    /// Output directory for keystore files
+    #[arg(long, short = 'o', default_value = "keystore")]
+    pub output_dir: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ValidatorKeys {
     /// Node key (ed25519) - LibP2P peer identity
@@ -74,6 +91,7 @@ pub fn handle_validator_command(cmd: ValidatorCommands) -> Result<()> {
     match cmd {
         ValidatorCommands::Generate(args) => handle_validator_generate(args),
         ValidatorCommands::ExportSeeds(args) => handle_export_seeds(args),
+        ValidatorCommands::ExportKeystore(args) => handle_export_keystore(args),
     }
 }
 
@@ -261,6 +279,99 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
     println!("     --aura-seed-file {}", aura_seed_path.display());
     println!("     --grandpa-seed-file {}", grandpa_seed_path.display());
     println!("     --cross-chain-seed-file {} (if using cross-chain)", node_seed_path.display());
+
+    Ok(())
+}
+
+fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
+    use secrecy::ExposeSecret;
+    use sp_core::crypto::Pair as PairTrait;
+    use std::io::Write;
+
+    // Get mnemonic
+    let mnemonic = if let Some(ref file) = args.mnemonic_file {
+        KeyReader::read_mnemonic_from_file(file)?
+    } else if let Some(ref phrase) = args.mnemonic {
+        KeyReader::read_mnemonic(phrase)?
+    } else {
+        anyhow::bail!("Either --mnemonic or --mnemonic-file must be specified");
+    };
+
+    let mnemonic_str = ExposeSecret::expose_secret(&mnemonic);
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&args.output_dir)?;
+
+    // Derive keys using same paths as validator generate
+    let aura_suri = format!("{}//midnight//aura", mnemonic_str);
+    let aura_pair = Sr25519::from_suri(&aura_suri)?;
+    let aura_public = Sr25519::public_key(&aura_pair);
+    let aura_public_bytes: &[u8] = aura_public.as_ref();
+
+    let grandpa_suri = format!("{}//midnight//grandpa", mnemonic_str);
+    let grandpa_pair = Ed25519::from_suri(&grandpa_suri)?;
+    let grandpa_public = Ed25519::public_key(&grandpa_pair);
+    let grandpa_public_bytes: &[u8] = grandpa_public.as_ref();
+
+    // Extract seeds (32 bytes each)
+    let aura_raw = aura_pair.to_raw_vec();
+    let grandpa_raw = grandpa_pair.to_raw_vec();
+
+    let aura_seed_hex = format!("0x{}", hex::encode(&aura_raw[..32]));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_raw[..32]));
+
+    // Create keystore files
+    // Keystore filename format: key_type_hex + public_key_hex
+    // "aura" = 61757261, "gran" = 6772616e
+
+    // Aura keystore file
+    let aura_pubkey_hex = hex::encode(aura_public_bytes);
+    let aura_filename = format!("61757261{}", aura_pubkey_hex);
+    let aura_path = args.output_dir.join(&aura_filename);
+
+    let mut aura_file = std::fs::File::create(&aura_path)?;
+    aura_file.write_all(format!("\"{}\"", aura_seed_hex).as_bytes())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&aura_path, permissions)?;
+    }
+
+    // Grandpa keystore file
+    let grandpa_pubkey_hex = hex::encode(grandpa_public_bytes);
+    let grandpa_filename = format!("6772616e{}", grandpa_pubkey_hex);
+    let grandpa_path = args.output_dir.join(&grandpa_filename);
+
+    let mut grandpa_file = std::fs::File::create(&grandpa_path)?;
+    grandpa_file.write_all(format!("\"{}\"", grandpa_seed_hex).as_bytes())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&grandpa_path, permissions)?;
+    }
+
+    println!("✓ Keystore files created:");
+    println!("  Aura (sr25519):");
+    println!("    Filename:   {}", aura_filename);
+    println!("    Public key: 0x{}", aura_pubkey_hex);
+    println!("    Path:       {}", aura_path.display());
+    println!();
+    println!("  Grandpa (ed25519):");
+    println!("    Filename:   {}", grandpa_filename);
+    println!("    Public key: 0x{}", grandpa_pubkey_hex);
+    println!("    Path:       {}", grandpa_path.display());
+    println!();
+    println!("✓ Keystore directory: {}", args.output_dir.display());
+    println!();
+    println!("⚠️  SECURITY WARNING:");
+    println!("   - These files contain SECRET KEYS");
+    println!("   - Keep them secure and never share them");
+    println!("   - Use with midnight-node:");
+    println!("     --keystore-path {}", args.output_dir.display());
 
     Ok(())
 }
