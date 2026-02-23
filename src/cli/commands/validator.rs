@@ -218,10 +218,17 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
     let grandpa_suri = format!("{}//midnight//grandpa", mnemonic_str);
     let grandpa_pair = Ed25519::from_suri(&grandpa_suri)?;
 
-    // Extract secret keys as hex
-    let node_seed_hex = format!("0x{}", hex::encode(node_pair.to_raw_vec()));
-    let aura_seed_hex = format!("0x{}", hex::encode(aura_pair.to_raw_vec()));
-    let grandpa_seed_hex = format!("0x{}", hex::encode(grandpa_pair.to_raw_vec()));
+    // Extract secret seeds as hex (32 bytes each)
+    // For sr25519: to_raw_vec() returns 64 bytes (32-byte mini-secret + 32-byte nonce),
+    // we only need the first 32 bytes (mini-secret)
+    // For ed25519: to_raw_vec() returns the full keypair, we need just the first 32 bytes (seed)
+    let node_raw = node_pair.to_raw_vec();
+    let aura_raw = aura_pair.to_raw_vec();
+    let grandpa_raw = grandpa_pair.to_raw_vec();
+
+    let node_seed_hex = format!("0x{}", hex::encode(&node_raw[..32]));
+    let aura_seed_hex = format!("0x{}", hex::encode(&aura_raw[..32]));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_raw[..32]));
 
     // Write seed files
     let node_seed_path = args.output_dir.join("node-seed.txt");
