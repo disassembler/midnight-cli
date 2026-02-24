@@ -62,8 +62,8 @@ impl WitnessCreation {
         skip_confirmation: bool,
         description: Option<String>,
     ) -> DomainResult<WitnessOutput> {
-        // Read payload
-        let payload_bytes = std::fs::read(payload_path)?;
+        // Read payload (handles both hex-encoded and binary formats)
+        let payload_bytes = Self::read_payload(payload_path)?;
 
         // Display and confirm
         if !skip_confirmation {
@@ -128,8 +128,8 @@ impl WitnessCreation {
         skip_confirmation: bool,
         description: Option<String>,
     ) -> DomainResult<WitnessOutput> {
-        // Read payload
-        let payload_bytes = std::fs::read(payload_path)?;
+        // Read payload (handles both hex-encoded and binary formats)
+        let payload_bytes = Self::read_payload(payload_path)?;
 
         // Display and confirm
         if !skip_confirmation {
@@ -203,6 +203,41 @@ impl WitnessCreation {
             skip_confirmation,
             description,
         )
+    }
+
+    /// Read payload from file, detecting and decoding hex-encoded content if present
+    ///
+    /// Supports two formats:
+    /// 1. Hex-encoded: File contains hex string (with or without 0x prefix)
+    /// 2. Binary: File contains raw bytes
+    fn read_payload(payload_path: &Path) -> DomainResult<Vec<u8>> {
+        let file_contents = std::fs::read(payload_path)?;
+
+        // Try to interpret as hex-encoded string
+        // First convert to UTF-8 string and trim whitespace
+        if let Ok(text) = String::from_utf8(file_contents.clone()) {
+            let trimmed = text.trim();
+
+            // Check if it looks like hex (with or without 0x prefix)
+            let hex_str = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+
+            // Only try to decode if it's non-empty and all valid hex characters
+            if !hex_str.is_empty() && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+                match hex::decode(hex_str) {
+                    Ok(decoded) => {
+                        eprintln!("ℹ️  Detected hex-encoded payload, decoded {} chars to {} bytes",
+                                  hex_str.len(), decoded.len());
+                        return Ok(decoded);
+                    }
+                    Err(_) => {
+                        // If hex decode fails, fall through to use raw bytes
+                    }
+                }
+            }
+        }
+
+        // Not hex-encoded or decode failed - use raw bytes
+        Ok(file_contents)
     }
 
     /// Display payload info and get user confirmation
@@ -280,7 +315,8 @@ impl WitnessCreation {
         let witness_json = std::fs::read_to_string(witness_path)?;
         let witness: WitnessOutput = serde_json::from_str(&witness_json)?;
 
-        let payload_bytes = std::fs::read(payload_path)?;
+        // Read payload (handles both hex-encoded and binary formats)
+        let payload_bytes = Self::read_payload(payload_path)?;
         let payload_hash = blake2_256(&payload_bytes);
         let payload_hash_hex = format!("0x{}", hex::encode(payload_hash));
 
@@ -451,5 +487,83 @@ mod tests {
 
         let valid = WitnessCreation::verify_witness(&witness_path, wrong_payload.path()).unwrap();
         assert!(!valid);
+    }
+
+    #[test]
+    fn test_hex_encoded_payload() {
+        use std::io::Write;
+
+        // Test data: some arbitrary bytes
+        let original_bytes = b"test governance proposal";
+
+        // Create hex-encoded payload file (with 0x prefix)
+        let mut hex_payload_file = NamedTempFile::new().unwrap();
+        let hex_string = format!("0x{}", hex::encode(original_bytes));
+        write!(hex_payload_file, "{}", hex_string).unwrap();
+        hex_payload_file.flush().unwrap();
+
+        // Create binary payload file
+        let mut binary_payload_file = NamedTempFile::new().unwrap();
+        binary_payload_file.write_all(original_bytes).unwrap();
+        binary_payload_file.flush().unwrap();
+
+        // Read both and verify they produce the same result
+        let hex_result = WitnessCreation::read_payload(hex_payload_file.path()).unwrap();
+        let binary_result = WitnessCreation::read_payload(binary_payload_file.path()).unwrap();
+
+        assert_eq!(hex_result, binary_result);
+        assert_eq!(hex_result, original_bytes);
+
+        // Verify hashes are the same
+        let hex_hash = blake2_256(&hex_result);
+        let binary_hash = blake2_256(&binary_result);
+        assert_eq!(hex_hash, binary_hash);
+    }
+
+    #[test]
+    fn test_hex_encoded_payload_without_prefix() {
+        use std::io::Write;
+
+        let original_bytes = b"test data";
+
+        // Create hex-encoded payload file (without 0x prefix)
+        let mut hex_payload_file = NamedTempFile::new().unwrap();
+        let hex_string = hex::encode(original_bytes);
+        write!(hex_payload_file, "{}", hex_string).unwrap();
+        hex_payload_file.flush().unwrap();
+
+        // Read and verify
+        let result = WitnessCreation::read_payload(hex_payload_file.path()).unwrap();
+        assert_eq!(result, original_bytes);
+    }
+
+    #[test]
+    fn test_witness_with_hex_payload() {
+        // Create hex-encoded payload
+        let original_bytes = b"governance action";
+        let mut hex_payload_file = NamedTempFile::new().unwrap();
+        let hex_string = format!("0x{}", hex::encode(original_bytes));
+        write!(hex_payload_file, "{}", hex_string).unwrap();
+        hex_payload_file.flush().unwrap();
+
+        // Create witness from hex payload
+        let witness = WitnessCreation::create_from_mnemonic(
+            hex_payload_file.path(),
+            TEST_MNEMONIC,
+            "//midnight//governance",
+            KeyTypeId::Sr25519,
+            KeyPurpose::Governance,
+            true,
+            Some("Hex payload test".to_string()),
+        )
+        .unwrap();
+
+        // Verify the hash in witness matches what we expect from the decoded bytes
+        let expected_hash = blake2_256(original_bytes);
+        let expected_hash_hex = format!("0x{}", hex::encode(expected_hash));
+        assert_eq!(witness.payload.hash, expected_hash_hex);
+
+        // Verify payload size is the decoded size, not the hex string length
+        assert_eq!(witness.payload.size, original_bytes.len());
     }
 }
