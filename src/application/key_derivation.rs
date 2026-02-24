@@ -1,5 +1,5 @@
 use crate::crypto::{Ed25519, Sr25519, SuriParser};
-use crate::domain::{DomainResult, KeyMaterial, KeyPurpose, KeyTypeId};
+use crate::domain::{DomainError, DomainResult, KeyMaterial, KeyPurpose, KeyTypeId};
 use crate::storage::KeyReader;
 use secrecy::ExposeSecret;
 use std::path::Path;
@@ -32,6 +32,12 @@ impl KeyDerivation {
             KeyTypeId::Ed25519 => {
                 let pair = Ed25519::from_suri(suri_str)?;
                 Ok(Ed25519::to_key_material(&pair, purpose, derivation_path))
+            }
+            KeyTypeId::Secp256k1 => {
+                Err(DomainError::UnsupportedDerivation {
+                    key_type: "secp256k1".to_string(),
+                    path: "SURI derivation not supported for payment keys - use BIP-32 paths instead".to_string(),
+                })
             }
         }
     }

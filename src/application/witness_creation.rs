@@ -109,6 +109,12 @@ impl WitnessCreation {
                     description,
                 )
             }
+            KeyTypeId::Secp256k1 => {
+                Err(DomainError::UnsupportedDerivation {
+                    key_type: "secp256k1".to_string(),
+                    path: "Payment key witness creation from .skey files not yet implemented".to_string(),
+                })
+            }
         }
     }
 
@@ -167,6 +173,12 @@ impl WitnessCreation {
                     Some(derivation_path.to_string()),
                     description,
                 )
+            }
+            KeyTypeId::Secp256k1 => {
+                Err(DomainError::UnsupportedDerivation {
+                    key_type: "secp256k1".to_string(),
+                    path: "Payment key witness creation with SURI not supported - use BIP-32 paths instead".to_string(),
+                })
             }
         }
     }
@@ -329,6 +341,12 @@ impl WitnessCreation {
 
                 Ok(Ed25519::verify(&public, &payload_bytes, &signature))
             }
+            KeyTypeId::Secp256k1 => {
+                Err(DomainError::UnsupportedDerivation {
+                    key_type: "secp256k1".to_string(),
+                    path: "Payment key witness verification not yet implemented".to_string(),
+                })
+            }
         }
     }
 }
@@ -349,7 +367,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Generate and save a key
-        let key = KeyGeneration::generate_from_mnemonic(TEST_MNEMONIC, KeyPurpose::Governance, 0)
+        let key = KeyGeneration::generate_from_mnemonic(TEST_MNEMONIC, KeyPurpose::Governance, None)
             .unwrap();
         let (skey_path, _) =
             KeyWriter::write_cardano_key_pair(&key, temp_dir.path(), "test").unwrap();

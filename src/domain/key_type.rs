@@ -8,6 +8,7 @@ use std::fmt;
 pub enum KeyTypeId {
     Sr25519,
     Ed25519,
+    Secp256k1,
 }
 
 impl KeyTypeId {
@@ -15,6 +16,7 @@ impl KeyTypeId {
         match s.to_lowercase().as_str() {
             "sr25519" => Ok(Self::Sr25519),
             "ed25519" => Ok(Self::Ed25519),
+            "secp256k1" => Ok(Self::Secp256k1),
             _ => Err(DomainError::InvalidKeyType(s.to_string())),
         }
     }
@@ -23,6 +25,7 @@ impl KeyTypeId {
         match self {
             Self::Sr25519 => "sr25519",
             Self::Ed25519 => "ed25519",
+            Self::Secp256k1 => "secp256k1",
         }
     }
 }
@@ -63,7 +66,8 @@ impl KeyPurpose {
     /// Get the default key type for this purpose
     pub fn default_key_type(&self) -> KeyTypeId {
         match self {
-            Self::Governance | Self::Payment => KeyTypeId::Sr25519,
+            Self::Governance => KeyTypeId::Sr25519,
+            Self::Payment => KeyTypeId::Secp256k1,
             Self::Finality => KeyTypeId::Ed25519,
         }
     }
@@ -142,7 +146,7 @@ mod tests {
     #[test]
     fn test_default_key_types() {
         assert_eq!(KeyPurpose::Governance.default_key_type(), KeyTypeId::Sr25519);
-        assert_eq!(KeyPurpose::Payment.default_key_type(), KeyTypeId::Sr25519);
+        assert_eq!(KeyPurpose::Payment.default_key_type(), KeyTypeId::Secp256k1);
         assert_eq!(KeyPurpose::Finality.default_key_type(), KeyTypeId::Ed25519);
     }
 }

@@ -26,8 +26,12 @@ serde_json = "1.0"
 serde_cbor = "0.11"
 hex = "0.4"
 
-# BIP39
+# BIP39 and BIP32
 bip39 = { version = "2.0", features = ["rand"] }
+bip32 = "0.5"
+
+# secp256k1 for payment keys
+secp256k1 = { version = "0.31", features = ["rand", "global-context"] }
 
 # Security
 secrecy = "0.8"
