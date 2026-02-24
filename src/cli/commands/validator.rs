@@ -227,26 +227,31 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)?;
 
     // Derive keys using same paths as validator generate
+    // Use from_string_with_seed to get the proper derived seed that can reconstruct the keypair
     let node_suri = format!("{}//midnight//node", mnemonic_str);
-    let node_pair = Ed25519::from_suri(&node_suri)?;
+    let (_node_pair, node_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&node_suri, None)
+        .map_err(|e| anyhow::anyhow!("Ed25519 node key derivation failed: {:?}", e))?;
 
     let aura_suri = format!("{}//midnight//aura", mnemonic_str);
-    let aura_pair = Sr25519::from_suri(&aura_suri)?;
+    let (_aura_pair, aura_seed_opt) = sp_core::sr25519::Pair::from_string_with_seed(&aura_suri, None)
+        .map_err(|e| anyhow::anyhow!("Sr25519 aura key derivation failed: {:?}", e))?;
 
     let grandpa_suri = format!("{}//midnight//grandpa", mnemonic_str);
-    let grandpa_pair = Ed25519::from_suri(&grandpa_suri)?;
+    let (_grandpa_pair, grandpa_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&grandpa_suri, None)
+        .map_err(|e| anyhow::anyhow!("Ed25519 grandpa key derivation failed: {:?}", e))?;
 
-    // Extract secret seeds as hex (32 bytes each)
-    // For sr25519: to_raw_vec() returns 64 bytes (32-byte mini-secret + 32-byte nonce),
-    // we only need the first 32 bytes (mini-secret)
-    // For ed25519: to_raw_vec() returns the full keypair, we need just the first 32 bytes (seed)
-    let node_raw = node_pair.to_raw_vec();
-    let aura_raw = aura_pair.to_raw_vec();
-    let grandpa_raw = grandpa_pair.to_raw_vec();
+    // Extract the derived seeds returned by from_string_with_seed
+    // These seeds are the correct values that can reconstruct the derived keypairs
+    let node_seed = node_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for node key"))?;
+    let aura_seed = aura_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for aura key"))?;
+    let grandpa_seed = grandpa_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for grandpa key"))?;
 
-    let node_seed_hex = format!("0x{}", hex::encode(&node_raw[..32]));
-    let aura_seed_hex = format!("0x{}", hex::encode(&aura_raw[..32]));
-    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_raw[..32]));
+    let node_seed_hex = format!("0x{}", hex::encode(&node_seed));
+    let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
 
     // Write seed files
     let node_seed_path = args.output_dir.join("node-seed.txt");
@@ -303,22 +308,28 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)?;
 
     // Derive keys using same paths as validator generate
+    // Use from_string_with_seed to get the proper derived seed that can reconstruct the keypair
     let aura_suri = format!("{}//midnight//aura", mnemonic_str);
-    let aura_pair = Sr25519::from_suri(&aura_suri)?;
-    let aura_public = Sr25519::public_key(&aura_pair);
+    let (aura_pair, aura_seed_opt) = sp_core::sr25519::Pair::from_string_with_seed(&aura_suri, None)
+        .map_err(|e| anyhow::anyhow!("Sr25519 aura key derivation failed: {:?}", e))?;
+    let aura_public = aura_pair.public();
     let aura_public_bytes: &[u8] = aura_public.as_ref();
 
     let grandpa_suri = format!("{}//midnight//grandpa", mnemonic_str);
-    let grandpa_pair = Ed25519::from_suri(&grandpa_suri)?;
-    let grandpa_public = Ed25519::public_key(&grandpa_pair);
+    let (grandpa_pair, grandpa_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&grandpa_suri, None)
+        .map_err(|e| anyhow::anyhow!("Ed25519 grandpa key derivation failed: {:?}", e))?;
+    let grandpa_public = grandpa_pair.public();
     let grandpa_public_bytes: &[u8] = grandpa_public.as_ref();
 
-    // Extract seeds (32 bytes each)
-    let aura_raw = aura_pair.to_raw_vec();
-    let grandpa_raw = grandpa_pair.to_raw_vec();
+    // Extract the derived seeds returned by from_string_with_seed
+    // These seeds are the correct values that can reconstruct the derived keypairs
+    let aura_seed = aura_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for aura key"))?;
+    let grandpa_seed = grandpa_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for grandpa key"))?;
 
-    let aura_seed_hex = format!("0x{}", hex::encode(&aura_raw[..32]));
-    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_raw[..32]));
+    let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
 
     // Create keystore files
     // Keystore filename format: key_type_hex + public_key_hex
