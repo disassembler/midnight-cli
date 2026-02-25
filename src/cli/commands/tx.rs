@@ -33,6 +33,10 @@ pub struct ProposeArgs {
     /// State file for multi-step governance workflows
     #[arg(long)]
     pub state_file: Option<PathBuf>,
+
+    /// Signer address (must be a governance member)
+    #[arg(long, help = "Address to use as signer (must be Council or TA member)")]
+    pub signer: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -189,6 +193,10 @@ pub struct CloseArgs {
     /// State file for multi-step governance workflows
     #[arg(long)]
     pub state_file: Option<PathBuf>,
+
+    /// Signer address (must be a governance member)
+    #[arg(long, help = "Address to use as signer (must be Council or TA member)")]
+    pub signer: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -236,6 +244,62 @@ pub async fn handle_tx_command(command: TxCommands) -> Result<()> {
         TxCommands::Close(args) => handle_close(args).await,
         TxCommands::Submit(args) => handle_submit(args).await,
     }
+}
+
+/// Extract all governance members from SCALE-encoded storage
+fn extract_all_members(data_hex: Option<String>, body_name: &str) -> Result<Vec<String>> {
+    let data_hex = data_hex.ok_or_else(|| anyhow::anyhow!("{} membership not found in storage", body_name))?;
+
+    let data = hex::decode(data_hex.trim_start_matches("0x"))?;
+    if data.is_empty() {
+        anyhow::bail!("No members found in {} storage", body_name);
+    }
+
+    // Decode compact-encoded Vec length
+    // SCALE compact encoding for small numbers (0-63): (value << 2) | 0b00
+    // To decode: if (byte & 0b11) == 0, then value = byte >> 2
+    let first_byte = data[0];
+    let mode = first_byte & 0b11;
+
+    let (member_count, offset_start) = if mode == 0b00 {
+        // Single-byte mode (0-63)
+        ((first_byte >> 2) as usize, 1)
+    } else if mode == 0b01 {
+        // Two-byte mode (64-16383)
+        if data.len() < 2 {
+            anyhow::bail!("Incomplete compact encoding for {} member count", body_name);
+        }
+        let value = ((first_byte as u16 >> 2) | ((data[1] as u16) << 6)) as usize;
+        (value, 2)
+    } else {
+        anyhow::bail!("Unsupported compact encoding mode for {} member count: {}", body_name, mode);
+    };
+
+    if member_count == 0 {
+        anyhow::bail!("No members in {} body", body_name);
+    }
+
+    let mut members = Vec::new();
+    let mut offset = offset_start;
+
+    // Each member is exactly 32 bytes (AccountId32)
+    for i in 0..member_count {
+        if offset + 32 > data.len() {
+            anyhow::bail!("Incomplete member data at index {} for {}", i, body_name);
+        }
+
+        let account_bytes = &data[offset..offset + 32];
+        let pubkey = sp_core::sr25519::Public::from_raw(
+            account_bytes.try_into()
+                .map_err(|_| anyhow::anyhow!("Failed to parse account bytes at offset {}", offset))?
+        );
+
+        use sp_core::crypto::Ss58Codec;
+        members.push(pubkey.to_ss58check());
+        offset += 32;
+    }
+
+    Ok(members)
 }
 
 async fn handle_propose(args: ProposeArgs) -> Result<()> {
@@ -293,36 +357,69 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
         .request("state_getStorage", rpc_params![ta_storage_key])
         .await?;
 
-    let council_member = if let Some(data_hex) = council_data_hex {
-        let data = hex::decode(data_hex.trim_start_matches("0x"))?;
-        if data.len() >= 33 {
-            let account_id = &data[1..33];
-            let pubkey = sp_core::sr25519::Public::from_raw(account_id.try_into()?);
-            use sp_core::crypto::Ss58Codec;
-            pubkey.to_ss58check()
-        } else {
-            anyhow::bail!("No council members found");
-        }
-    } else {
-        anyhow::bail!("Council membership not found in storage");
+    // Extract all members
+    let council_members = extract_all_members(council_data_hex, "Council")?;
+    let ta_members = extract_all_members(ta_data_hex, "Technical Authority")?;
+
+    eprintln!("   Council members: {}", council_members.len());
+    eprintln!("   Technical Authority members: {}", ta_members.len());
+    eprintln!("");
+
+    // Determine which body is proposing (early check for signer validation)
+    let is_council = match &args.proposal {
+        ProposalType::Membership(m) => match &m.body {
+            MembershipBody::Council(_) => true,
+            MembershipBody::Ta(_) => false,
+        },
+        ProposalType::System(s) => match &s.body {
+            SystemBody::Council(_) => true,
+            SystemBody::Ta(_) => false,
+        },
+        ProposalType::Runtime(r) => match &r.body {
+            RuntimeBody::Council(_) => true,
+            RuntimeBody::Ta(_) => false,
+        },
     };
 
-    let ta_member = if let Some(data_hex) = ta_data_hex {
-        let data = hex::decode(data_hex.trim_start_matches("0x"))?;
-        if data.len() >= 33 {
-            let account_id = &data[1..33];
-            let pubkey = sp_core::sr25519::Public::from_raw(account_id.try_into()?);
-            use sp_core::crypto::Ss58Codec;
-            pubkey.to_ss58check()
-        } else {
-            anyhow::bail!("No TA members found");
-        }
+    let (available_members, body_name) = if is_council {
+        (council_members, "Council")
     } else {
-        anyhow::bail!("TA membership not found in storage");
+        (ta_members, "Technical Authority")
     };
 
-    eprintln!("   Council: {}", council_member);
-    eprintln!("   Technical Authority: {}", ta_member);
+    // Select or validate signer (BEFORE building any payloads)
+    let signer_address = if let Some(provided_signer) = &args.signer {
+        // Validate provided signer is a member
+        if !available_members.contains(provided_signer) {
+            eprintln!("❌ Error: Address {} is not a member of {}", provided_signer, body_name);
+            eprintln!();
+            eprintln!("Available {} members:", body_name);
+            for (idx, member) in available_members.iter().enumerate() {
+                eprintln!("  {}. {}", idx + 1, member);
+            }
+            eprintln!();
+            eprintln!("Usage: --signer <ADDRESS>");
+            anyhow::bail!("Invalid signer address");
+        }
+        provided_signer.clone()
+    } else {
+        // No signer provided - show available members and error
+        eprintln!("❌ Error: No signer address specified");
+        eprintln!();
+        eprintln!("Available {} members:", body_name);
+        for (idx, member) in available_members.iter().enumerate() {
+            eprintln!("  {}. {}", idx + 1, member);
+        }
+        eprintln!();
+        eprintln!("Please specify which member to sign as:");
+        eprintln!("  --signer <ADDRESS>");
+        eprintln!();
+        eprintln!("Example:");
+        eprintln!("  --signer {}", available_members[0]);
+        anyhow::bail!("Missing required --signer argument");
+    };
+
+    eprintln!("✓ Using signer: {}", signer_address);
     eprintln!("");
 
     // Build the proposal call using subxt
@@ -344,26 +441,20 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     state["proposalHash"] = json!(proposal_hash_hex);
     state["proposalLength"] = json!(proposal_length);
 
-    // Determine which body is proposing and build the outer call
-    let (is_council, filename) = match &args.proposal {
+    // Determine filename for output
+    let filename = match &args.proposal {
         ProposalType::Membership(m) => match &m.body {
-            MembershipBody::Council(_) => (true, "council-propose-membership"),
-            MembershipBody::Ta(_) => (false, "ta-propose-membership"),
+            MembershipBody::Council(_) => "council-propose-membership",
+            MembershipBody::Ta(_) => "ta-propose-membership",
         },
         ProposalType::System(s) => match &s.body {
-            SystemBody::Council(_) => (true, "council-propose-system"),
-            SystemBody::Ta(_) => (false, "ta-propose-system"),
+            SystemBody::Council(_) => "council-propose-system",
+            SystemBody::Ta(_) => "ta-propose-system",
         },
         ProposalType::Runtime(r) => match &r.body {
-            RuntimeBody::Council(_) => (true, "council-propose-runtime"),
-            RuntimeBody::Ta(_) => (false, "ta-propose-runtime"),
+            RuntimeBody::Council(_) => "council-propose-runtime",
+            RuntimeBody::Ta(_) => "ta-propose-runtime",
         },
-    };
-
-    let signer_address = if is_council {
-        council_member
-    } else {
-        ta_member
     };
 
     let threshold = 1u32; // TODO: Calculate actual threshold
@@ -508,6 +599,8 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     };
 
     // Query governance members
+    eprintln!("👥 Querying governance members...");
+
     let council_storage_key = format!("0x{}{}",
         hex::encode(sp_core::hashing::twox_128(b"CouncilMembership")),
         hex::encode(sp_core::hashing::twox_128(b"Members"))
@@ -524,35 +617,15 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
         .request("state_getStorage", rpc_params![ta_storage_key])
         .await?;
 
-    let council_member = if let Some(data_hex) = council_data_hex {
-        let data = hex::decode(data_hex.trim_start_matches("0x"))?;
-        if data.len() >= 33 {
-            let account_id = &data[1..33];
-            let pubkey = sp_core::sr25519::Public::from_raw(account_id.try_into()?);
-            use sp_core::crypto::Ss58Codec;
-            pubkey.to_ss58check()
-        } else {
-            anyhow::bail!("No council members found");
-        }
-    } else {
-        anyhow::bail!("Council membership not found");
-    };
+    // Extract all members
+    let council_members = extract_all_members(council_data_hex, "Council")?;
+    let ta_members = extract_all_members(ta_data_hex, "Technical Authority")?;
 
-    let ta_member = if let Some(data_hex) = ta_data_hex {
-        let data = hex::decode(data_hex.trim_start_matches("0x"))?;
-        if data.len() >= 33 {
-            let account_id = &data[1..33];
-            let pubkey = sp_core::sr25519::Public::from_raw(account_id.try_into()?);
-            use sp_core::crypto::Ss58Codec;
-            pubkey.to_ss58check()
-        } else {
-            anyhow::bail!("No TA members found");
-        }
-    } else {
-        anyhow::bail!("TA membership not found");
-    };
+    eprintln!("   Council members: {}", council_members.len());
+    eprintln!("   Technical Authority members: {}", ta_members.len());
+    eprintln!();
 
-    let (is_council, proposal_index, proposal_hash, proposal_length, signer_address, filename, state_key) = match &args.body {
+    let (is_council, proposal_index, proposal_hash, proposal_length, filename, state_key) = match &args.body {
         CloseBody::Council { proposal_index, proposal_hash, proposal_length } => {
             let hash = proposal_hash.clone()
                 .or_else(|| state.get("proposalHash").and_then(|v| v.as_str()).map(String::from))
@@ -560,7 +633,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
             let length = proposal_length.unwrap_or_else(||
                 state.get("proposalLength").and_then(|v| v.as_u64()).unwrap_or(0) as u32
             );
-            (true, *proposal_index, hash, length, council_member, "council-close", "councilProposalIndex")
+            (true, *proposal_index, hash, length, "council-close", "councilProposalIndex")
         }
         CloseBody::Ta { proposal_index, proposal_hash, proposal_length } => {
             let hash = proposal_hash.clone()
@@ -569,9 +642,50 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
             let length = proposal_length.unwrap_or_else(||
                 state.get("proposalLength").and_then(|v| v.as_u64()).unwrap_or(0) as u32
             );
-            (false, *proposal_index, hash, length, ta_member, "ta-close", "taProposalIndex")
+            (false, *proposal_index, hash, length, "ta-close", "taProposalIndex")
         }
     };
+
+    let (available_members, body_name) = if is_council {
+        (council_members, "Council")
+    } else {
+        (ta_members, "Technical Authority")
+    };
+
+    // Select or validate signer
+    let signer_address = if let Some(provided_signer) = &args.signer {
+        // Validate provided signer is a member
+        if !available_members.contains(provided_signer) {
+            eprintln!("❌ Error: Address {} is not a member of {}", provided_signer, body_name);
+            eprintln!();
+            eprintln!("Available {} members:", body_name);
+            for (idx, member) in available_members.iter().enumerate() {
+                eprintln!("  {}. {}", idx + 1, member);
+            }
+            eprintln!();
+            eprintln!("Usage: --signer <ADDRESS>");
+            anyhow::bail!("Invalid signer address");
+        }
+        provided_signer.clone()
+    } else {
+        // No signer provided - show available members and error
+        eprintln!("❌ Error: No signer address specified");
+        eprintln!();
+        eprintln!("Available {} members:", body_name);
+        for (idx, member) in available_members.iter().enumerate() {
+            eprintln!("  {}. {}", idx + 1, member);
+        }
+        eprintln!();
+        eprintln!("Please specify which member to sign as:");
+        eprintln!("  --signer <ADDRESS>");
+        eprintln!();
+        eprintln!("Example:");
+        eprintln!("  --signer {}", available_members[0]);
+        anyhow::bail!("Missing required --signer argument");
+    };
+
+    eprintln!("✓ Using signer: {}", signer_address);
+    eprintln!();
 
     // Build the close call using subxt
     let call_bytes = super::tx_builder::build_close_call(
