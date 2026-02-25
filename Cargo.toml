@@ -20,11 +20,17 @@ scale-info = "2.0"
 subxt = { version = "0.37", features = ["substrate-compat"] }
 jsonrpsee = { version = "0.24", features = ["ws-client", "client"] }
 
+# gRPC for UTxORPC (hayate)
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }
 
 # Core cryptography
 schnorrkel = "0.11"
+libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -52,6 +58,10 @@ rand = "0.8"
 anyhow = "1.0"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+protobuf-src = "2"
 
 [dev-dependencies]
 tempfile = "3.8"
