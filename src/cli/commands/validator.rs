@@ -1,10 +1,11 @@
 use crate::application::KeyGeneration;
-use crate::crypto::{Ed25519, Sr25519};
+use crate::crypto::{Ecdsa, Ed25519, Sr25519};
 use crate::domain::KeyPurpose;
 use crate::storage::KeyReader;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
+use sp_core::crypto::Pair as PairTrait;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -38,6 +39,14 @@ pub struct ValidatorGenerateArgs {
     /// Output directory for .skey/.vkey files (if --write-key-files)
     #[arg(long, default_value = ".")]
     pub key_files_dir: PathBuf,
+
+    /// Validator hostname or IP address (requires --port)
+    #[arg(long, requires = "port")]
+    pub hostname: Option<String>,
+
+    /// Validator P2P port (requires --hostname)
+    #[arg(long, requires = "hostname")]
+    pub port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -78,6 +87,11 @@ pub struct ValidatorKeys {
     pub aura_key: KeyData,
     /// Grandpa key (ed25519) - Finality gadget
     pub grandpa_key: KeyData,
+    /// BEEFY key (ecdsa) - Bridge finality proofs for Cardano
+    pub beefy_key: KeyData,
+    /// Bootnode multiaddr (if hostname and port provided)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bootnode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +106,37 @@ pub fn handle_validator_command(cmd: ValidatorCommands) -> Result<()> {
         ValidatorCommands::Generate(args) => handle_validator_generate(args),
         ValidatorCommands::ExportSeeds(args) => handle_export_seeds(args),
         ValidatorCommands::ExportKeystore(args) => handle_export_keystore(args),
+    }
+}
+
+/// Convert Ed25519 public key to libp2p PeerId
+fn ed25519_to_peer_id(public_key_bytes: &[u8]) -> Result<String> {
+    // Create libp2p Ed25519 public key
+    let ed25519_pubkey = libp2p_identity::ed25519::PublicKey::try_from_bytes(public_key_bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid Ed25519 public key: {:?}", e))?;
+
+    // Convert to libp2p PublicKey and then to PeerId
+    let public_key = libp2p_identity::PublicKey::from(ed25519_pubkey);
+    let peer_id = libp2p_identity::PeerId::from_public_key(&public_key);
+
+    Ok(peer_id.to_string())
+}
+
+/// Generate bootnode multiaddr from hostname/IP, port, and peer ID
+fn generate_bootnode_multiaddr(hostname: &str, port: u16, peer_id: &str) -> String {
+    // Auto-detect if it's an IP address or hostname
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(_) => {
+                format!("/ip4/{}/tcp/{}/p2p/{}", hostname, port, peer_id)
+            }
+            std::net::IpAddr::V6(_) => {
+                format!("/ip6/{}/tcp/{}/p2p/{}", hostname, port, peer_id)
+            }
+        }
+    } else {
+        // Hostname - use /dns/ protocol
+        format!("/dns/{}/tcp/{}/p2p/{}", hostname, port, peer_id)
     }
 }
 
@@ -130,6 +175,22 @@ fn handle_validator_generate(args: ValidatorGenerateArgs) -> Result<()> {
     let grandpa_public = Ed25519::public_key(&grandpa_pair);
     let grandpa_public_bytes: &[u8] = grandpa_public.as_ref();
 
+    // Generate BEEFY key (ecdsa) - Bridge finality proofs
+    let beefy_suri = format!("{}//midnight//beefy", mnemonic_str);
+    let beefy_pair = sp_core::ecdsa::Pair::from_string(&beefy_suri, None)
+        .map_err(|e| anyhow::anyhow!("ECDSA beefy key derivation failed: {:?}", e))?;
+    let beefy_public = beefy_pair.public();
+    let beefy_public_bytes: &[u8] = beefy_public.as_ref();
+
+    // Generate bootnode multiaddr if hostname and port provided
+    let bootnode = if let (Some(ref hostname), Some(port)) = (&args.hostname, args.port) {
+        let peer_id = ed25519_to_peer_id(node_public_bytes)?;
+        let multiaddr = generate_bootnode_multiaddr(hostname, port, &peer_id);
+        Some(multiaddr)
+    } else {
+        None
+    };
+
     // Create public keys JSON
     let validator_keys = ValidatorKeys {
         node_key: KeyData {
@@ -147,6 +208,12 @@ fn handle_validator_generate(args: ValidatorGenerateArgs) -> Result<()> {
             public_key_hex: hex::encode(grandpa_public_bytes),
             ss58_address: Some(Ed25519::to_ss58_address(&grandpa_public)),
         },
+        beefy_key: KeyData {
+            key_type: "ecdsa".to_string(),
+            public_key_hex: hex::encode(beefy_public_bytes),
+            ss58_address: None, // ECDSA keys don't use SS58 encoding
+        },
+        bootnode,
     };
 
     // Write JSON file
@@ -157,6 +224,12 @@ fn handle_validator_generate(args: ValidatorGenerateArgs) -> Result<()> {
     println!("  Node key (ed25519):    {}", validator_keys.node_key.public_key_hex);
     println!("  Aura key (sr25519):    {}", validator_keys.aura_key.public_key_hex);
     println!("  Grandpa key (ed25519): {}", validator_keys.grandpa_key.public_key_hex);
+    println!("  BEEFY key (ecdsa):     {}", validator_keys.beefy_key.public_key_hex);
+    if let Some(ref bootnode) = validator_keys.bootnode {
+        println!();
+        println!("✓ Bootnode multiaddr:");
+        println!("  {}", bootnode);
+    }
     println!();
     println!("✓ Public keys written to: {}", args.output.display());
 
@@ -198,11 +271,24 @@ fn handle_validator_generate(args: ValidatorGenerateArgs) -> Result<()> {
             "grandpa",
         )?;
 
+        // Write beefy key files
+        let beefy_key_material = Ecdsa::to_key_material(
+            &beefy_pair,
+            KeyPurpose::Finality,
+            Some("//midnight//beefy".to_string()),
+        );
+        let (beefy_skey, beefy_vkey) = crate::storage::KeyWriter::write_cardano_key_pair(
+            &beefy_key_material,
+            &args.key_files_dir,
+            "beefy",
+        )?;
+
         println!();
         println!("✓ Key files written:");
         println!("  Node:    {}, {}", node_skey.display(), node_vkey.display());
         println!("  Aura:    {}, {}", aura_skey.display(), aura_vkey.display());
         println!("  Grandpa: {}, {}", grandpa_skey.display(), grandpa_vkey.display());
+        println!("  BEEFY:   {}, {}", beefy_skey.display(), beefy_vkey.display());
     }
 
     Ok(())
@@ -240,6 +326,10 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
     let (_grandpa_pair, grandpa_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&grandpa_suri, None)
         .map_err(|e| anyhow::anyhow!("Ed25519 grandpa key derivation failed: {:?}", e))?;
 
+    let beefy_suri = format!("{}//midnight//beefy", mnemonic_str);
+    let (_beefy_pair, beefy_seed_opt) = sp_core::ecdsa::Pair::from_string_with_seed(&beefy_suri, None)
+        .map_err(|e| anyhow::anyhow!("ECDSA beefy key derivation failed: {:?}", e))?;
+
     // Extract the derived seeds returned by from_string_with_seed
     // These seeds are the correct values that can reconstruct the derived keypairs
     let node_seed = node_seed_opt
@@ -248,19 +338,24 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No seed returned for aura key"))?;
     let grandpa_seed = grandpa_seed_opt
         .ok_or_else(|| anyhow::anyhow!("No seed returned for grandpa key"))?;
+    let beefy_seed = beefy_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for beefy key"))?;
 
     let node_seed_hex = format!("0x{}", hex::encode(&node_seed));
     let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
     let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
+    let beefy_seed_hex = format!("0x{}", hex::encode(&beefy_seed));
 
     // Write seed files
     let node_seed_path = args.output_dir.join("node-seed.txt");
     let aura_seed_path = args.output_dir.join("aura-seed.txt");
     let grandpa_seed_path = args.output_dir.join("grandpa-seed.txt");
+    let beefy_seed_path = args.output_dir.join("beefy-seed.txt");
 
     std::fs::write(&node_seed_path, &node_seed_hex)?;
     std::fs::write(&aura_seed_path, &aura_seed_hex)?;
     std::fs::write(&grandpa_seed_path, &grandpa_seed_hex)?;
+    std::fs::write(&beefy_seed_path, &beefy_seed_hex)?;
 
     #[cfg(unix)]
     {
@@ -269,13 +364,15 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
         let permissions = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(&node_seed_path, permissions.clone())?;
         std::fs::set_permissions(&aura_seed_path, permissions.clone())?;
-        std::fs::set_permissions(&grandpa_seed_path, permissions)?;
+        std::fs::set_permissions(&grandpa_seed_path, permissions.clone())?;
+        std::fs::set_permissions(&beefy_seed_path, permissions)?;
     }
 
     println!("✓ Validator seed files exported:");
     println!("  Node (ed25519):    {}", node_seed_path.display());
     println!("  Aura (sr25519):    {}", aura_seed_path.display());
     println!("  Grandpa (ed25519): {}", grandpa_seed_path.display());
+    println!("  BEEFY (ecdsa):     {}", beefy_seed_path.display());
     println!();
     println!("⚠️  SECURITY WARNING:");
     println!("   - These files contain SECRET KEYS");
@@ -309,6 +406,10 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
 
     // Derive keys using same paths as validator generate
     // Use from_string_with_seed to get the proper derived seed that can reconstruct the keypair
+    let node_suri = format!("{}//midnight//node", mnemonic_str);
+    let (node_pair, node_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&node_suri, None)
+        .map_err(|e| anyhow::anyhow!("Ed25519 node key derivation failed: {:?}", e))?;
+
     let aura_suri = format!("{}//midnight//aura", mnemonic_str);
     let (aura_pair, aura_seed_opt) = sp_core::sr25519::Pair::from_string_with_seed(&aura_suri, None)
         .map_err(|e| anyhow::anyhow!("Sr25519 aura key derivation failed: {:?}", e))?;
@@ -321,19 +422,43 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
     let grandpa_public = grandpa_pair.public();
     let grandpa_public_bytes: &[u8] = grandpa_public.as_ref();
 
+    let beefy_suri = format!("{}//midnight//beefy", mnemonic_str);
+    let (beefy_pair, beefy_seed_opt) = sp_core::ecdsa::Pair::from_string_with_seed(&beefy_suri, None)
+        .map_err(|e| anyhow::anyhow!("ECDSA beefy key derivation failed: {:?}", e))?;
+    let beefy_public = beefy_pair.public();
+    let beefy_public_bytes: &[u8] = beefy_public.as_ref();
+
     // Extract the derived seeds returned by from_string_with_seed
     // These seeds are the correct values that can reconstruct the derived keypairs
+    let node_seed = node_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for node key"))?;
     let aura_seed = aura_seed_opt
         .ok_or_else(|| anyhow::anyhow!("No seed returned for aura key"))?;
     let grandpa_seed = grandpa_seed_opt
         .ok_or_else(|| anyhow::anyhow!("No seed returned for grandpa key"))?;
+    let beefy_seed = beefy_seed_opt
+        .ok_or_else(|| anyhow::anyhow!("No seed returned for beefy key"))?;
 
+    let node_seed_hex = format!("0x{}", hex::encode(&node_seed));
     let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
     let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
+    let beefy_seed_hex = format!("0x{}", hex::encode(&beefy_seed));
 
     // Create keystore files
     // Keystore filename format: key_type_hex + public_key_hex
-    // "aura" = 61757261, "gran" = 6772616e
+    // "aura" = 61757261, "gran" = 6772616e, "beef" = 62656566
+
+    // Node key as network_secret (for libp2p network identity)
+    let network_secret_path = args.output_dir.join("network_secret");
+    let mut network_secret_file = std::fs::File::create(&network_secret_path)?;
+    network_secret_file.write_all(&node_seed)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&network_secret_path, permissions)?;
+    }
 
     // Aura keystore file
     let aura_pubkey_hex = hex::encode(aura_public_bytes);
@@ -365,7 +490,26 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
         std::fs::set_permissions(&grandpa_path, permissions)?;
     }
 
+    // BEEFY keystore file
+    let beefy_pubkey_hex = hex::encode(beefy_public_bytes);
+    let beefy_filename = format!("62656566{}", beefy_pubkey_hex);
+    let beefy_path = args.output_dir.join(&beefy_filename);
+
+    let mut beefy_file = std::fs::File::create(&beefy_path)?;
+    beefy_file.write_all(format!("\"{}\"", beefy_seed_hex).as_bytes())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&beefy_path, permissions)?;
+    }
+
     println!("✓ Keystore files created:");
+    println!("  Network secret (node/ed25519):");
+    println!("    Filename:   network_secret");
+    println!("    Path:       {}", network_secret_path.display());
+    println!();
     println!("  Aura (sr25519):");
     println!("    Filename:   {}", aura_filename);
     println!("    Public key: 0x{}", aura_pubkey_hex);
@@ -375,6 +519,11 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
     println!("    Filename:   {}", grandpa_filename);
     println!("    Public key: 0x{}", grandpa_pubkey_hex);
     println!("    Path:       {}", grandpa_path.display());
+    println!();
+    println!("  BEEFY (ecdsa):");
+    println!("    Filename:   {}", beefy_filename);
+    println!("    Public key: 0x{}", beefy_pubkey_hex);
+    println!("    Path:       {}", beefy_path.display());
     println!();
     println!("✓ Keystore directory: {}", args.output_dir.display());
     println!();

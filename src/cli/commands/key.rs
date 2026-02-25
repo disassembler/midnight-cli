@@ -238,6 +238,11 @@ fn handle_derive(args: DeriveArgs) -> Result<()> {
                 Ed25519::to_ss58_address_with_network(&public, &args.network)
                     .map_err(|e| anyhow::anyhow!(e))?
             },
+            KeyTypeId::Ecdsa => {
+                // ECDSA keys don't have SS58 addresses
+                // Just return the hex-encoded public key
+                format!("0x{}", hex::encode(&key.public_key))
+            },
             KeyTypeId::Secp256k1 => {
                 // Secp256k1 payment keys don't have SS58 addresses
                 // Just return the hex-encoded public key

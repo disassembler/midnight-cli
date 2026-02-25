@@ -9,6 +9,7 @@ pub enum KeyTypeId {
     Sr25519,
     Ed25519,
     Secp256k1,
+    Ecdsa,
 }
 
 impl KeyTypeId {
@@ -17,6 +18,7 @@ impl KeyTypeId {
             "sr25519" => Ok(Self::Sr25519),
             "ed25519" => Ok(Self::Ed25519),
             "secp256k1" => Ok(Self::Secp256k1),
+            "ecdsa" => Ok(Self::Ecdsa),
             _ => Err(DomainError::InvalidKeyType(s.to_string())),
         }
     }
@@ -26,6 +28,7 @@ impl KeyTypeId {
             Self::Sr25519 => "sr25519",
             Self::Ed25519 => "ed25519",
             Self::Secp256k1 => "secp256k1",
+            Self::Ecdsa => "ecdsa",
         }
     }
 }

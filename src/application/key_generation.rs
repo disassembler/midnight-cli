@@ -1,4 +1,4 @@
-use crate::crypto::{generate_mnemonic, Ed25519, Sr25519, SuriParser};
+use crate::crypto::{generate_mnemonic, Ecdsa, Ed25519, Sr25519, SuriParser};
 use crate::domain::{
     DomainError, DomainResult, KeyMaterial, KeyPurpose, KeyTypeId,
 };
@@ -111,6 +111,10 @@ impl KeyGeneration {
             KeyTypeId::Ed25519 => {
                 let pair = Ed25519::from_suri(suri)?;
                 Ok(Ed25519::to_key_material(&pair, purpose, derivation_path))
+            }
+            KeyTypeId::Ecdsa => {
+                let pair = Ecdsa::from_suri(suri)?;
+                Ok(Ecdsa::to_key_material(&pair, purpose, derivation_path))
             }
             KeyTypeId::Secp256k1 => {
                 Err(DomainError::UnsupportedDerivation {

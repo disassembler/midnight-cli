@@ -1,4 +1,4 @@
-use crate::crypto::{Ed25519, Sr25519};
+use crate::crypto::{Ecdsa, Ed25519, Sr25519};
 use crate::domain::{DomainError, DomainResult, KeyPurpose, KeyTypeId};
 use crate::storage::KeyReader;
 use chrono::Utc;
@@ -129,6 +129,22 @@ impl WitnessCreation {
                     description,
                 )
             }
+            KeyTypeId::Ecdsa => {
+                let pair = Ecdsa::from_secret_hex(&hex::encode(&secret_bytes))?;
+                let signature = Ecdsa::sign(&pair, &payload_bytes);
+                let public = Ecdsa::public_key(&pair);
+
+                Self::create_witness_output(
+                    &payload_bytes,
+                    signature.as_ref(),
+                    public.as_ref(),
+                    key_type,
+                    purpose,
+                    None, // ECDSA doesn't have SS58 address
+                    None,
+                    description,
+                )
+            }
             KeyTypeId::Secp256k1 => {
                 Err(DomainError::UnsupportedDerivation {
                     key_type: "secp256k1".to_string(),
@@ -190,6 +206,22 @@ impl WitnessCreation {
                     key_type,
                     purpose,
                     Some(ss58_address),
+                    Some(derivation_path.to_string()),
+                    description,
+                )
+            }
+            KeyTypeId::Ecdsa => {
+                let pair = Ecdsa::from_suri(&suri_str)?;
+                let signature = Ecdsa::sign(&pair, &payload_bytes);
+                let public = Ecdsa::public_key(&pair);
+
+                Self::create_witness_output(
+                    &payload_bytes,
+                    signature.as_ref(),
+                    public.as_ref(),
+                    key_type,
+                    purpose,
+                    None, // ECDSA doesn't have SS58 address
                     Some(derivation_path.to_string()),
                     description,
                 )
@@ -500,6 +532,25 @@ impl WitnessCreation {
                 let signature = Signature::from_raw(sig_array);
 
                 Ok(Ed25519::verify(&public, &payload_bytes, &signature))
+            }
+            KeyTypeId::Ecdsa => {
+                use sp_core::ecdsa::{Public, Signature};
+
+                if public_key_bytes.len() != 33 {
+                    return Err(DomainError::CryptoError("Invalid ECDSA public key length".to_string()));
+                }
+                let mut public_array = [0u8; 33];
+                public_array.copy_from_slice(&public_key_bytes);
+                let public = Public::from_raw(public_array);
+
+                if signature_bytes.len() != 65 {
+                    return Err(DomainError::CryptoError("Invalid ECDSA signature length".to_string()));
+                }
+                let mut sig_array = [0u8; 65];
+                sig_array.copy_from_slice(&signature_bytes);
+                let signature = Signature::from_raw(sig_array);
+
+                Ok(Ecdsa::verify(&public, &payload_bytes, &signature))
             }
             KeyTypeId::Secp256k1 => {
                 Err(DomainError::UnsupportedDerivation {
