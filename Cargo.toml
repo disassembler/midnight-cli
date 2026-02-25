@@ -13,6 +13,15 @@ categories = ["cryptography", "command-line-utilities"]
 [dependencies]
 # Substrate primitives
 sp-core = { version = "34", default-features = false, features = ["std", "full_crypto"] }
+parity-scale-codec = { version = "3.0", features = ["derive"] }
+scale-info = "2.0"
+
+# RPC client
+subxt = { version = "0.37", features = ["substrate-compat"] }
+jsonrpsee = { version = "0.24", features = ["ws-client", "client"] }
+
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
 
 # Core cryptography
 schnorrkel = "0.11"

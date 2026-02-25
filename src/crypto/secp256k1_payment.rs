@@ -19,6 +19,7 @@ pub struct Secp256k1Payment;
 
 impl Secp256k1Payment {
     /// Hardening constant for BIP-32
+    #[allow(dead_code)]
     const HARDENED: u32 = 0x80000000;
 
     /// Derive a payment keypair from mnemonic using BIP-32 path
@@ -124,6 +125,7 @@ impl Secp256k1Payment {
     }
 
     /// Get hex-encoded signature
+    #[allow(dead_code)]
     pub fn signature_hex(signature: &SchnorrSignature) -> String {
         format!("0x{}", hex::encode(signature.as_ref()))
     }

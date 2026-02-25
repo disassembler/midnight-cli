@@ -17,6 +17,7 @@ use std::fmt;
 /// These correspond to different types of addresses in the Midnight wallet
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum PaymentRole {
     /// Unshielded External (role 0) - Primary chain for unshielded tokens and Night
     UnshieldedExternal,
@@ -97,6 +98,7 @@ impl fmt::Display for PaymentRole {
 /// BIP-32 derivation path for Midnight payment keys
 /// Format: m/44'/2400'/account'/role/index
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct Bip32Path {
     /// BIP-44 purpose (always 44)
     pub purpose: u32,

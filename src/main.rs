@@ -10,8 +10,9 @@ mod storage;
 use cli::{
     handle_key_command, handle_witness_command, handle_validator_command,
     handle_governance_command, handle_genesis_command, handle_mnemonic_command,
-    KeyCommands, WitnessCommands, ValidatorCommands, GovernanceCommands,
-    GenesisCommands, MnemonicCommands,
+    handle_tx_command, handle_query_command, KeyCommands, WitnessCommands,
+    ValidatorCommands, GovernanceCommands, GenesisCommands, MnemonicCommands,
+    TxCommands, QueryArgs,
 };
 
 #[derive(Parser)]
@@ -48,9 +49,17 @@ enum Commands {
     /// Mnemonic operations
     #[command(subcommand)]
     Mnemonic(MnemonicCommands),
+
+    /// Transaction operations
+    #[command(subcommand)]
+    Tx(TxCommands),
+
+    /// Query chain state
+    Query(QueryArgs),
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -60,5 +69,7 @@ fn main() -> Result<()> {
         Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd),
         Commands::Genesis(genesis_cmd) => handle_genesis_command(genesis_cmd),
         Commands::Mnemonic(mnemonic_cmd) => handle_mnemonic_command(mnemonic_cmd),
+        Commands::Tx(tx_cmd) => handle_tx_command(tx_cmd).await,
+        Commands::Query(query_cmd) => handle_query_command(query_cmd).await,
     }
 }

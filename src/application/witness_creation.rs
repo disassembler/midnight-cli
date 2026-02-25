@@ -2,6 +2,7 @@ use crate::crypto::{Ed25519, Sr25519};
 use crate::domain::{DomainError, DomainResult, KeyPurpose, KeyTypeId};
 use crate::storage::KeyReader;
 use chrono::Utc;
+use parity_scale_codec::{Compact, Encode};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use sp_core::hashing::blake2_256;
@@ -48,6 +49,25 @@ pub struct WitnessMetadata {
     pub timestamp: String,
     pub purpose: String,
     pub description: Option<String>,
+}
+
+/// Transaction metadata for extrinsic construction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionMetadata {
+    #[serde(rename = "signerAddress")]
+    pub signer_address: String,
+    pub nonce: u64,
+    pub method: String,
+    pub era: String,
+    pub tip: u64,
+    #[serde(rename = "specVersion")]
+    pub spec_version: u32,
+    #[serde(rename = "transactionVersion")]
+    pub transaction_version: u32,
+    #[serde(rename = "genesisHash")]
+    pub genesis_hash: String,
+    #[serde(rename = "blockHash")]
+    pub block_hash: String,
 }
 
 /// Witness creation use case
@@ -210,12 +230,12 @@ impl WitnessCreation {
     /// Supports two formats:
     /// 1. Hex-encoded: File contains hex string (with or without 0x prefix)
     /// 2. Binary: File contains raw bytes
+    ///
+    /// Also automatically detects and strips Compact length prefix if present.
     fn read_payload(payload_path: &Path) -> DomainResult<Vec<u8>> {
         let file_contents = std::fs::read(payload_path)?;
 
-        // Try to interpret as hex-encoded string
-        // First convert to UTF-8 string and trim whitespace
-        if let Ok(text) = String::from_utf8(file_contents.clone()) {
+        let mut payload_bytes = if let Ok(text) = String::from_utf8(file_contents.clone()) {
             let trimmed = text.trim();
 
             // Check if it looks like hex (with or without 0x prefix)
@@ -227,17 +247,59 @@ impl WitnessCreation {
                     Ok(decoded) => {
                         eprintln!("ℹ️  Detected hex-encoded payload, decoded {} chars to {} bytes",
                                   hex_str.len(), decoded.len());
-                        return Ok(decoded);
+                        decoded
                     }
                     Err(_) => {
-                        // If hex decode fails, fall through to use raw bytes
+                        // If hex decode fails, use raw bytes
+                        file_contents
                     }
                 }
+            } else {
+                file_contents
+            }
+        } else {
+            // Not UTF-8, use raw bytes
+            file_contents
+        };
+
+        // Check for and strip Compact length prefix
+        // Substrate Compact encoding for lengths:
+        // - Single byte (00): 0b00xxxxxx, value = xxxxxx (0-63)
+        // - Two bytes (01): 0bxxxxxxx1, value = xxxxxxx0 | (next_byte << 6)
+        // - Four bytes (10): 0bxxxxxx10, value from next 4 bytes
+        // We detect this by checking if the first 1-2 bytes encode the length of remaining bytes
+        if !payload_bytes.is_empty() {
+            let first_byte = payload_bytes[0];
+            let mode = first_byte & 0x03; // Last 2 bits indicate mode
+
+            // Decode compact length (handle single and two-byte modes)
+            let (prefix_len, decoded_len) = match mode {
+                0 => {
+                    // Single-byte mode: 0b00xxxxxx
+                    let len = (first_byte >> 2) as usize;
+                    (1, len)
+                }
+                1 if payload_bytes.len() >= 2 => {
+                    // Two-byte mode: 0bxxxxxxx1
+                    let second_byte = payload_bytes[1];
+                    let len = (((first_byte as usize) >> 2) | ((second_byte as usize) << 6)) as usize;
+                    (2, len)
+                }
+                _ => {
+                    // Other modes (4-byte, big integer) or can't decode - assume no prefix
+                    (0, 0)
+                }
+            };
+
+            // Check if this matches the remaining bytes length
+            if prefix_len > 0 && payload_bytes.len() == decoded_len + prefix_len {
+                eprintln!("ℹ️  Detected and stripped Compact length prefix ({} bytes, payload now {} bytes)",
+                          prefix_len, decoded_len);
+                payload_bytes = payload_bytes[prefix_len..].to_vec();
             }
         }
 
-        // Not hex-encoded or decode failed - use raw bytes
-        Ok(file_contents)
+        Ok(payload_bytes)
     }
 
     /// Display payload info and get user confirmation
@@ -305,6 +367,68 @@ impl WitnessCreation {
                 description,
             },
         })
+    }
+
+    /// Construct a signed extrinsic from transaction metadata and signature
+    pub fn construct_signed_extrinsic(
+        tx_metadata_path: &Path,
+        signature: &[u8],
+        public_key: &[u8],
+    ) -> DomainResult<String> {
+        // Read and parse transaction metadata JSON
+        let tx_json = std::fs::read_to_string(tx_metadata_path)?;
+        let tx_metadata: TransactionMetadata = serde_json::from_str(&tx_json)?;
+
+        // Version byte for signed extrinsic (bit 7 = signed, bits 0-6 = version 4)
+        let version_byte: u8 = 0x84;
+
+        // Decode address from SS58 to get the public key bytes
+        // For Sr25519, the address is AccountId32 which is just the 32-byte public key
+        // with SS58 encoding. We'll use the public key directly with AccountId32 format.
+        let address_bytes = {
+            // For a MultiAddress::Id variant (0x00 prefix + 32 byte AccountId)
+            let mut bytes = vec![0x00]; // MultiAddress::Id variant
+            bytes.extend_from_slice(public_key);
+            bytes
+        };
+
+        // Decode signature (already in raw format)
+        // For MultiSignature::Sr25519 variant (0x01 prefix + 64 byte signature)
+        let signature_bytes = {
+            let mut bytes = vec![0x01]; // MultiSignature::Sr25519 variant
+            bytes.extend_from_slice(signature);
+            bytes
+        };
+
+        // Decode era from hex
+        let era_hex = tx_metadata.era.strip_prefix("0x").unwrap_or(&tx_metadata.era);
+        let era_bytes = hex::decode(era_hex)?;
+
+        // Encode nonce as Compact<u64>
+        let nonce_bytes = Compact(tx_metadata.nonce).encode();
+
+        // Decode method from hex
+        let method_hex = tx_metadata.method.strip_prefix("0x").unwrap_or(&tx_metadata.method);
+        let method_bytes = hex::decode(method_hex)?;
+
+        // Construct the extrinsic without length prefix
+        let mut extrinsic = Vec::new();
+        extrinsic.push(version_byte);
+        extrinsic.extend_from_slice(&address_bytes);
+        extrinsic.extend_from_slice(&signature_bytes);
+        extrinsic.extend_from_slice(&era_bytes);
+        extrinsic.extend_from_slice(&nonce_bytes);
+        // Note: tip is NOT included in the extrinsic when it's 0
+        // The Midnight runtime doesn't use the CheckBalanceTransfer signed extension
+        extrinsic.extend_from_slice(&method_bytes);
+
+        // Add compact length prefix
+        let length_bytes = Compact(extrinsic.len() as u32).encode();
+        let mut final_extrinsic = Vec::new();
+        final_extrinsic.extend_from_slice(&length_bytes);
+        final_extrinsic.extend_from_slice(&extrinsic);
+
+        Ok(format!("0x{}", hex::encode(final_extrinsic)))
     }
 
     /// Verify a witness against a payload
