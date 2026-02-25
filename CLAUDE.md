@@ -50,6 +50,14 @@ nix develop
 cargo check
 ```
 
+### Git Commit Guidelines
+
+IMPORTANT: When using Claude Code to create commits in this repository:
+- **NEVER include AI attribution** in commit messages
+- Do NOT add lines like "🤖 Generated with Claude Code" or "Co-Authored-By: Claude"
+- Commit messages should be clean, professional, and focused on the technical changes
+- Follow conventional commit format when applicable (feat:, fix:, docs:, etc.)
+
 ### Running
 
 ```bash
@@ -103,6 +111,89 @@ cargo run -- witness create \
 
 # Verify a witness
 cargo run -- witness verify --witness witness.json --payload proposal.bin
+
+# Query chain state
+# Query recent extrinsics
+cargo run -- query extrinsics --blocks 10 --endpoint ws://localhost:9944
+
+# Query pending governance proposals
+cargo run -- query proposals --verbose --endpoint ws://localhost:9944
+
+# Query events from recent blocks
+cargo run -- query events --blocks 5 --endpoint ws://localhost:9944
+
+# Query events from specific block
+cargo run -- query events --block 1234 --endpoint ws://localhost:9944
+
+# Query events from block range
+cargo run -- query events --from 1000 --to 1010 --endpoint ws://localhost:9944
+
+# Filter events by section and method
+cargo run -- query events --section Council --method Proposed
+
+# Show all events (not just governance)
+cargo run -- query events --all
+
+# Create governance transactions (online machine)
+# Propose adding a council member
+cargo run -- tx propose membership council add-member 5GrwvaEF... \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./governance-payloads
+
+# Propose removing a TA member
+cargo run -- tx propose membership ta remove-member 5DfhGyQd... \
+  --endpoint ws://localhost:9944
+
+# Propose a system remark (council)
+cargo run -- tx propose system council remark "Governance test message"
+
+# Propose runtime upgrade authorization (TA)
+cargo run -- tx propose runtime ta authorize-upgrade 0xabcd1234...
+
+# Close a proposal after voting (council)
+cargo run -- tx close council \
+  --proposal-index 0 \
+  --proposal-hash 0xabcd... \
+  --proposal-length 42 \
+  --endpoint ws://localhost:9944
+
+# Close a proposal (TA) - hash/length from state file
+cargo run -- tx close ta \
+  --proposal-index 1 \
+  --state-file ./governance-payloads/state.json
+
+# Submit a signed extrinsic to the network
+cargo run -- tx submit \
+  --extrinsic ./governance-payloads/council-propose-membership.extrinsic \
+  --endpoint ws://localhost:9944
+
+# Generate genesis and build chain spec (requires midnight-node in PATH)
+cargo run -- genesis init \
+  --validator validator1.json \
+  --validator validator2.json \
+  --ta ta1.json \
+  --ta ta2.json \
+  --council council1.json \
+  --council council2.json \
+  --night-policy-id <hex> \
+  --chain-id sanchonight \
+  --chainspec-dir ./chainspec \
+  --midnight-node-res ~/work/iohk/midnight-node/res
+
+# This will:
+# 1. Check midnight-node is in PATH
+# 2. Create genesis.json
+# 3. Generate all chainspec config files (8 files total):
+#    - permissioned-candidates-config.json
+#    - federated-authority-config.json (with SS58→hex conversion)
+#    - cnight-config.json
+#    - ics-config.json
+#    - reserve-config.json
+#    - pc-chain-config.json
+#    - system-parameters-config.json
+#    - registered-candidates-addresses.json
+# 4. Execute: midnight-node build-spec --disable-default-bootnode
+# 5. Output: chainspec/chain-spec.json (ready to use)
 ```
 
 ## Architecture
@@ -140,12 +231,19 @@ Use case orchestration:
 User interface:
 - **commands/key.rs**: Key management commands (generate, derive, inspect, batch)
 - **commands/witness.rs**: Witness commands (create, verify)
+- **commands/query.rs**: Chain state query commands (extrinsics, proposals, events)
+- **commands/tx.rs**: Transaction creation and submission (propose, close, submit)
+- **commands/tx_builder.rs**: Metadata-driven transaction encoding with subxt
+- **commands/genesis.rs**: Genesis and chainspec generation (init, cnight)
 - **output.rs**: Output formatting (JSON, text)
 
 ### Key Flow Examples
 
 1. **Generate Key**: BIP39 mnemonic → SURI parser → Sr25519/Ed25519 derivation → Cardano format → .skey/.vkey files
 2. **Create Witness**: Payload file → Blake2-256 hash → Load key → Sign → JSON witness output
+3. **Query Chain State**: WebSocket RPC → Subxt client → Decode storage/events → Formatted output
+4. **Create Transaction**: Proposal spec → Subxt metadata → SCALE encoding → Signing payload → Air-gap transfer → Sign → Submit to network
+5. **Build Chain Spec**: Validator/governance keys → Genesis JSON → 8 chainspec configs → midnight-node build-spec → chain-spec.json
 
 ### Security Model
 
@@ -165,6 +263,9 @@ This tool is designed for air-gapped operations:
 - **serde_cbor 0.11**: CBOR encoding for Cardano-style key files
 - **secrecy 0.8**: Secure secret handling (prevents accidental logging)
 - **zeroize 1.7**: Zero memory on drop for security
+- **subxt 0.37**: Substrate client library for metadata-driven transaction encoding
+- **jsonrpsee 0.24**: WebSocket RPC client for chain state queries
+- **parity-scale-codec 3.6**: SCALE encoding/decoding for Substrate types
 
 ### Output Format Compatibility
 
@@ -174,12 +275,30 @@ The tool matches `subkey` output format for easy integration with existing Subst
 
 ### Governance Workflow
 
-The intended air-gap workflow:
-1. **Online machine**: Fetch governance proposal from Midnight network, encode call payload
+The intended air-gap workflow for governance transactions:
+
+#### Modern Workflow (using `tx` commands - recommended):
+1. **Online machine**: Create governance proposal using `tx propose` command
+   - Connects to Midnight node to fetch metadata and current state
+   - Encodes proposal call using subxt with runtime metadata
+   - Generates signing payload with proper era, nonce, and chain context
+   - Saves `.payload` and `.json` metadata files
+2. **Transfer**: Move payload and metadata files to air-gap machine via USB/QR
+3. **Air-gap machine**: Sign the payload using `witness create-extrinsic`
+   - Verifies payload hash matches metadata
+   - Signs with governance key from mnemonic
+   - Creates signed extrinsic file
+4. **Transfer**: Move signed `.extrinsic` file back to online machine
+5. **Online machine**: Submit using `tx submit --extrinsic <file>`
+6. **Query**: Use `query proposals` and `query events` to monitor status
+7. **Close**: When voting complete, use `tx close` to execute the proposal
+
+#### Legacy Workflow (manual payload encoding):
+1. **Online machine**: Manually fetch and encode governance proposal
 2. **Transfer**: Move payload file to air-gap machine via USB/QR
-3. **Air-gap machine**: Run `witness` command to create signature after verifying payload hash
+3. **Air-gap machine**: Run `witness create` to create signature after verifying payload hash
 4. **Transfer**: Move witness JSON back to online machine
-5. **Online machine**: Submit signature to complete governance action
+5. **Online machine**: Manually construct and submit signed transaction
 
 ### Nix Integration
 

@@ -2,3 +2,26 @@ target
 result
 .direnv
 .claude
+
+# Sensitive key material
+*.mnemonic
+*.skey
+*.vkey
+*.asc
+
+# Test data and payloads
+test_data/
+governance-payloads/
+*payload*.txt
+*payload*.bin
+test-*.txt
+
+# Backup files
+*.bak
+*.backup
+
+# JavaScript test files (if any remain)
+*.js
+
+# Temporary files
+.direnv-zsh/

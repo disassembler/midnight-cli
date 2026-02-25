@@ -14,6 +14,8 @@ The Midnight CLI provides secure, offline (air-gapped) cryptographic operations 
 - 🔒 **GPG Support**: Encrypted mnemonic files
 - ⚡ **Simplified Workflow**: Auto-derivation from purpose and index
 - 📝 **Comprehensive Witnesses**: Full metadata and signature verification
+- 🔍 **Chain Query**: Query proposals, events, and extrinsics from Midnight nodes
+- 🏛️ **Governance Transactions**: Create, sign, and submit governance proposals with metadata-driven encoding
 
 ## Installation
 
@@ -152,6 +154,106 @@ midnight-cli witness verify \
   --payload <payload-file>
 ```
 
+### Query Commands
+
+```bash
+# Query recent extrinsics (transactions)
+midnight-cli query extrinsics \
+  --blocks 10 \
+  [--endpoint ws://localhost:9944]
+
+# Query pending governance proposals
+midnight-cli query proposals \
+  [--verbose] \
+  [--endpoint ws://localhost:9944]
+
+# Query events from recent blocks
+midnight-cli query events \
+  --blocks 5 \
+  [--endpoint ws://localhost:9944]
+
+# Query events from specific block
+midnight-cli query events \
+  --block 1234 \
+  [--endpoint ws://localhost:9944]
+
+# Query events from block range
+midnight-cli query events \
+  --from 1000 --to 1010 \
+  [--endpoint ws://localhost:9944]
+
+# Filter events by section and method
+midnight-cli query events \
+  --section Council \
+  --method Proposed
+
+# Show all events (default: governance and system only)
+midnight-cli query events --all
+```
+
+### Transaction Commands
+
+**Complete governance workflow with air-gap signing:**
+
+```bash
+# Step 1: Create proposal (online machine)
+midnight-cli tx propose membership council add-member 5GrwvaEF... \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./governance-payloads
+
+# Outputs:
+#   - council-propose-membership.payload (for signing)
+#   - council-propose-membership.json (metadata)
+#   - state.json (proposal hash and details)
+
+# Step 2: Transfer payload and metadata to air-gap machine
+
+# Step 3: Sign on air-gap machine
+midnight-cli witness create-extrinsic \
+  --payload ./governance-payloads/council-propose-membership.payload \
+  --tx-metadata ./governance-payloads/council-propose-membership.json \
+  --mnemonic-file midnight.mnemonic \
+  --purpose governance \
+  --output ./governance-payloads/council-propose-membership.extrinsic
+
+# Step 4: Transfer signed extrinsic back to online machine
+
+# Step 5: Submit to network (online machine)
+midnight-cli tx submit \
+  --extrinsic ./governance-payloads/council-propose-membership.extrinsic \
+  --endpoint ws://localhost:9944
+
+# Step 6: Monitor proposal
+midnight-cli query proposals --verbose
+
+# Step 7: After voting completes, close proposal
+midnight-cli tx close council \
+  --proposal-index 0 \
+  --state-file ./governance-payloads/state.json \
+  --endpoint ws://localhost:9944
+
+# Step 8: Sign and submit the close transaction (repeat steps 2-5)
+```
+
+**Available proposal types:**
+
+```bash
+# Membership proposals
+midnight-cli tx propose membership council add-member <address>
+midnight-cli tx propose membership council remove-member <address>
+midnight-cli tx propose membership council swap-member <old> <new>
+midnight-cli tx propose membership ta add-member <address>
+midnight-cli tx propose membership ta set-prime <address>
+
+# System proposals
+midnight-cli tx propose system council remark "Message text"
+midnight-cli tx propose system ta remark "Message text"
+
+# Runtime proposals
+midnight-cli tx propose runtime ta authorize-upgrade <code-hash>
+midnight-cli tx propose runtime ta set-code <wasm-hex>
+```
+
 ### Network Setup (SanchoNight / Federated Networks)
 
 ```bash
@@ -171,7 +273,8 @@ midnight-cli governance generate \
   [--write-key-files] \
   [--key-files-dir <dir>]
 
-# Create genesis configuration from individual key files
+# Create genesis configuration and build chain spec
+# Requires midnight-node in PATH
 midnight-cli genesis init \
   --validator <validator1.json> \
   --validator <validator2.json> \
@@ -181,7 +284,14 @@ midnight-cli genesis init \
   --council <council2.json> \
   [--night-policy-id <hex>] \
   [--chain-id <name>] \
-  --output genesis.json
+  [--chainspec-dir <dir>] \
+  [--midnight-node-res <path>]
+
+# This will:
+# 1. Create genesis.json
+# 2. Generate all chainspec config files
+# 3. Execute midnight-node build-spec to create chain-spec.json
+# 4. Output ready-to-use chain spec in chainspec/chain-spec.json
 ```
 
 ## Workflows
@@ -231,8 +341,9 @@ midnight-cli governance generate --output ta1-governance.json
 # TA Member 2: Generate governance key
 midnight-cli governance generate --output ta2-governance.json
 
-# Coordinator: Create genesis from individual key files
+# Coordinator: Create genesis and build chain spec
 # (After receiving JSON files from all operators, TA, and Council members)
+# Requires midnight-node in PATH
 midnight-cli genesis init \
   --validator operator1-validator.json \
   --validator operator2-validator.json \
@@ -243,9 +354,15 @@ midnight-cli genesis init \
   --council council3-governance.json \
   --night-policy-id <policy-id-from-cardano> \
   --chain-id sanchonight \
-  --output genesis.json
+  --chainspec-dir ./sanchonight-spec
 
-# Use genesis.json to configure midnight-node for network launch
+# This automatically:
+# - Creates genesis.json with all keys
+# - Generates all chainspec config files (permissioned-candidates, federated-authority, etc.)
+# - Executes midnight-node build-spec to create chain-spec.json
+# - Ready to use: ./sanchonight-spec/chain-spec.json
+
+# Distribute chain-spec.json to all validators to launch the network
 ```
 
 ### On-Demand Workflow (Dynamic Derivation)
@@ -275,8 +392,29 @@ midnight-cli witness create \
 
 ## Air-Gap Security Workflow
 
+### Modern Workflow (using `tx` commands - recommended)
+
 **On online machine:**
-1. Fetch governance proposal from Midnight network
+1. Create governance proposal using `tx propose` command
+2. Tool fetches metadata from node and generates signing payload
+3. Transfer `.payload` and `.json` files to air-gapped machine via USB/QR
+
+**On air-gapped machine:**
+4. Run `midnight-cli witness create-extrinsic` with mnemonic file
+5. Review displayed payload hash - verify it matches published proposal
+6. Confirm signature creation
+7. Tool creates signed extrinsic file
+8. Transfer `.extrinsic` file back to online machine
+
+**On online machine:**
+9. Submit using `tx submit --extrinsic <file>`
+10. Monitor with `query proposals` and `query events`
+11. When voting complete, use `tx close` to execute proposal
+
+### Legacy Workflow (manual payload encoding)
+
+**On online machine:**
+1. Manually fetch and encode governance proposal
 2. Create payload file (`proposal.txt`)
 3. Transfer via USB/QR code to air-gapped machine
 
@@ -287,7 +425,7 @@ midnight-cli witness create \
 7. Transfer `witness.json` back to online machine
 
 **On online machine:**
-8. Submit witness to Midnight Network via RPC/API
+8. Manually construct and submit signed transaction
 
 ## File Formats
 
@@ -351,34 +489,51 @@ legal winner thank year wave sausage worth useful legal winner thank year wave s
 
 ## Governance Action Examples
 
-### Runtime Upgrade
+### Runtime Upgrade (Modern Approach)
 
-```javascript
-// Prepare the action call
-const actionCall = api.tx.federatedAuthority.motionApprove(
-  api.tx.system.authorizeUpgrade(wasmHash).method
-);
+```bash
+# Technical Authority proposes runtime upgrade authorization
+midnight-cli tx propose runtime ta authorize-upgrade \
+  0x1234abcd... \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./governance-payloads
 
-// Encode to file
-fs.writeFileSync('proposal.txt', actionCall.method.toHex());
+# Sign on air-gap machine
+midnight-cli witness create-extrinsic \
+  --payload ./governance-payloads/ta-propose-runtime.payload \
+  --tx-metadata ./governance-payloads/ta-propose-runtime.json \
+  --mnemonic-file ta-member.mnemonic \
+  --purpose governance \
+  --output ./governance-payloads/ta-propose-runtime.extrinsic
+
+# Submit to network
+midnight-cli tx submit \
+  --extrinsic ./governance-payloads/ta-propose-runtime.extrinsic
 ```
 
-### D-Parameter Update
+### Membership Management
 
-```javascript
-const dParamCall = api.tx.systemParameters.updateDParameter(
-  numPermissionedCandidates,
-  numRegisteredCandidates
-);
+```bash
+# Council adds a new member
+midnight-cli tx propose membership council add-member 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+
+# Technical Authority removes a member
+midnight-cli tx propose membership ta remove-member 5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRzV
+
+# Council swaps one member for another
+midnight-cli tx propose membership council swap-member \
+  5OldMember... \
+  5NewMember...
 ```
 
-### Terms & Conditions Update
+### System Operations
 
-```javascript
-const tncCall = api.tx.systemParameters.updateTermsAndConditions(
-  termsHash,      // 0x... SHA-256 hash
-  termsUrl        // string (UTF-8)
-);
+```bash
+# Post a governance message on-chain
+midnight-cli tx propose system council remark "Governance milestone: Q1 2026 completed"
+
+# Technical Authority system message
+midnight-cli tx propose system ta remark "Runtime upgrade v1.2.0 deployed successfully"
 ```
 
 ## Integration with Cardano Air-Gap Infrastructure
@@ -464,6 +619,9 @@ cargo test --lib key_generation
 - **serde_cbor 0.11**: CBOR encoding for Cardano-style keys
 - **secrecy 0.8**: Secure secret handling
 - **zeroize 1.7**: Memory zeroization
+- **subxt 0.37**: Substrate client library for metadata-driven transaction encoding
+- **jsonrpsee 0.24**: WebSocket RPC client for chain state queries
+- **parity-scale-codec 3.6**: SCALE encoding/decoding for Substrate types
 
 ## Architecture
 
@@ -473,7 +631,13 @@ The codebase follows **clean architecture** with 5 layers:
 2. **Crypto Layer** (`src/crypto/`): Sr25519/Ed25519 operations, SURI parser
 3. **Storage Layer** (`src/storage/`): Cardano format, GPG support, file I/O
 4. **Application Layer** (`src/application/`): Use cases (key generation, witness creation)
-5. **CLI Layer** (`src/cli/`): Commands and argument parsing
+5. **CLI Layer** (`src/cli/`): Commands (key, witness, query, tx), argument parsing, transaction builder
+
+**Key Features:**
+- Metadata-driven transaction encoding using `subxt`
+- WebSocket RPC client for chain state queries
+- Air-gap workflow support with payload/metadata file separation
+- SCALE codec for Substrate type encoding/decoding
 
 ## License
 
