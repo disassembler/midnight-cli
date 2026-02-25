@@ -11,6 +11,7 @@
           cmake
           rustc
           pkg-config
+          protobuf
           openssl
           zlib
           rust-analyzer

@@ -1,39 +1,66 @@
 {inputs, ...}: {
   perSystem = {
+    inputs',
     system,
     config,
     lib,
     pkgs,
     ...
-  }: {
+  }: let
+    # Use stable toolchain
+    toolchain = with inputs'.fenix.packages;
+      combine [
+        minimal.rustc
+        minimal.cargo
+        complete.clippy
+        complete.rustfmt
+      ];
+
+    craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
+
+    src = lib.fileset.toSource {
+      root = ./..;
+      fileset = lib.fileset.unions [
+        ../Cargo.lock
+        ../Cargo.toml
+        ../build.rs
+        ../proto
+        ../src
+      ];
+    };
+
+    # Extract pname and version from Cargo.toml
+    crateInfo = craneLib.crateNameFromCargoToml {cargoToml = ../Cargo.toml;};
+
+    commonArgs = {
+      inherit src;
+      inherit (crateInfo) pname version;
+      strictDeps = true;
+
+      nativeBuildInputs = with pkgs; [
+        pkg-config
+        protobuf
+        cmake
+      ];
+
+      meta = {
+        description = "Key management and governance tooling for Midnight Network";
+        license = lib.licenses.asl20;
+        mainProgram = "midnight-cli";
+      };
+    };
+
+    # Build dependencies separately for caching
+    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+  in {
     packages = {
-      midnight-cli = let
-        naersk-lib = inputs.naersk.lib.${system};
-      in
-        naersk-lib.buildPackage rec {
-          pname = "midnight-cli";
+      default = config.packages.midnight-cli;
 
-          src = with lib.fileset;
-            toSource {
-              root = ./..;
-              fileset = unions [
-                ../Cargo.lock
-                ../Cargo.toml
-                ../src
-              ];
-            };
-
-          buildInputs = with pkgs; [
-            pkg-config
-          ];
-
-          meta = {
-            mainProgram = pname;
-            license = with lib.licenses; [
-              asl20
-            ];
-          };
-        };
+      midnight-cli = craneLib.buildPackage (commonArgs
+        // {
+          inherit cargoArtifacts;
+          doCheck = true;
+        });
     };
   };
 }
