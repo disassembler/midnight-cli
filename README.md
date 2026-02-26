@@ -45,7 +45,7 @@ echo "your 24-word phrase here..." > midnight.mnemonic
 midnight-cli key generate \
   --mnemonic-file midnight.mnemonic \
   --purpose governance \
-  --output ./keys/
+  --output-dir ./keys/
 
 # Files created:
 # - governance.skey (private key - keep secure!)
@@ -93,21 +93,21 @@ midnight-cli witness verify \
 midnight-cli key generate \
   --purpose <governance|finality> \
   [--mnemonic-file <path>] \
-  --output <dir>
+  --output-dir <dir>
 
 # Generate payment key (index required - multiple per wallet)
 midnight-cli key generate \
   --purpose payment \
   --index <N> \
   [--mnemonic-file <path>] \
-  --output <dir>
+  --output-dir <dir>
 
 # Batch generate multiple payment keys
 midnight-cli key batch \
   --mnemonic-file <path> \
   --purposes payment \
   --indices 0,1,2,3,4 \
-  --output <dir>
+  --output-dir <dir>
 
 # Derive key on-demand (no file output)
 midnight-cli key derive \
@@ -304,7 +304,7 @@ midnight-cli genesis init \
 # Step 1: Generate governance key (offline, air-gapped machine)
 midnight-cli key generate \
   --purpose governance \
-  --output /secure/keys/
+  --output-dir /secure/keys/
 # Save the displayed mnemonic phrase in secure cold storage!
 
 # Step 2: Generate batch of payment keys for future use
@@ -312,7 +312,7 @@ midnight-cli key batch \
   --mnemonic-file /secure/mnemonic.txt \
   --purposes payment \
   --indices 0,1,2,3,4,5,6,7,8,9 \
-  --output /secure/keys/
+  --output-dir /secure/keys/
 
 # Step 3: Later, when signing is needed (air-gapped machine)
 midnight-cli witness create \

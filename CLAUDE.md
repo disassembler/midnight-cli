@@ -62,16 +62,16 @@ IMPORTANT: When using Claude Code to create commits in this repository:
 
 ```bash
 # Generate governance key from new mnemonic (no index - one per wallet)
-cargo run -- key generate --purpose governance --output ./keys
+cargo run -- key generate --purpose governance --output-dir ./keys
 
 # Generate governance key from existing mnemonic
-cargo run -- key generate --purpose governance --mnemonic "seed phrase..." --output ./keys
+cargo run -- key generate --purpose governance --mnemonic "seed phrase..." --output-dir ./keys
 
 # Generate payment key from mnemonic file (index required - multiple per wallet)
-cargo run -- key generate --purpose payment --index 0 --mnemonic-file mnemonic.txt --output ./keys
+cargo run -- key generate --purpose payment --index 0 --mnemonic-file mnemonic.txt --output-dir ./keys
 
 # Batch generate multiple payment keys
-cargo run -- key batch --mnemonic-file mnemonic.txt --purposes payment --indices 0,1,2,3,4 --output ./keys
+cargo run -- key batch --mnemonic-file mnemonic.txt --purposes payment --indices 0,1,2,3,4 --output-dir ./keys
 
 # Derive a key on-demand (no file output) - default path //midnight//governance
 cargo run -- key derive --mnemonic-file mnemonic.txt --derivation "//midnight//governance" --purpose governance --key-type sr25519 --format json
