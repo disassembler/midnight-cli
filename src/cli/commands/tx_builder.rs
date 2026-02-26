@@ -16,7 +16,7 @@ pub fn build_proposal_call(
             };
 
             match action {
-                MembershipAction::AddMember { address } => {
+                MembershipAction::AddMember { address, .. } => {
                     let account_bytes = parse_ss58_address(address)?;
                     let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account_bytes)]);
                     let multi_address = Value::unnamed_variant("Id", vec![account_id]);
@@ -25,7 +25,7 @@ pub fn build_proposal_call(
                         format!("Add member {}", address),
                     ))
                 }
-                MembershipAction::RemoveMember { address } => {
+                MembershipAction::RemoveMember { address, .. } => {
                     let account_bytes = parse_ss58_address(address)?;
                     let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account_bytes)]);
                     let multi_address = Value::unnamed_variant("Id", vec![account_id]);
@@ -34,7 +34,7 @@ pub fn build_proposal_call(
                         format!("Remove member {}", address),
                     ))
                 }
-                MembershipAction::SwapMember { old_address, new_address } => {
+                MembershipAction::SwapMember { old_address, new_address, .. } => {
                     let old_account = parse_ss58_address(old_address)?;
                     let new_account = parse_ss58_address(new_address)?;
                     let old_id = Value::unnamed_composite(vec![Value::from_bytes(&old_account)]);
@@ -50,7 +50,7 @@ pub fn build_proposal_call(
                         format!("Swap member {} → {}", old_address, new_address),
                     ))
                 }
-                MembershipAction::ResetMembers { addresses } => {
+                MembershipAction::ResetMembers { addresses, .. } => {
                     let accounts: Result<Vec<_>> = addresses
                         .iter()
                         .map(|addr| parse_ss58_address(addr))
@@ -65,7 +65,7 @@ pub fn build_proposal_call(
                         format!("Reset members ({} new members)", addresses.len()),
                     ))
                 }
-                MembershipAction::ChangeKey { old_address, new_address } => {
+                MembershipAction::ChangeKey { old_address, new_address, .. } => {
                     let old_account = parse_ss58_address(old_address)?;
                     let new_account = parse_ss58_address(new_address)?;
                     let old_id = Value::unnamed_composite(vec![Value::from_bytes(&old_account)]);
@@ -81,7 +81,7 @@ pub fn build_proposal_call(
                         format!("Change key {} → {}", old_address, new_address),
                     ))
                 }
-                MembershipAction::SetPrime { address } => {
+                MembershipAction::SetPrime { address, .. } => {
                     let account = parse_ss58_address(address)?;
                     let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account)]);
                     let multi_address = Value::unnamed_variant("Id", vec![account_id]);
@@ -90,7 +90,7 @@ pub fn build_proposal_call(
                         format!("Set prime member {}", address),
                     ))
                 }
-                MembershipAction::ClearPrime => Ok((
+                MembershipAction::ClearPrime { .. } => Ok((
                     subxt::dynamic::tx(pallet_name, "clear_prime", Vec::<Value>::new()),
                     "Clear prime member".to_string(),
                 )),
@@ -102,7 +102,7 @@ pub fn build_proposal_call(
             };
 
             match action {
-                SystemAction::Remark { message } => {
+                SystemAction::Remark { message, .. } => {
                     let message_bytes = message.as_bytes();
                     Ok((
                         subxt::dynamic::tx(
@@ -121,7 +121,7 @@ pub fn build_proposal_call(
             };
 
             match action {
-                RuntimeAction::AuthorizeUpgrade { code_hash } => {
+                RuntimeAction::AuthorizeUpgrade { code_hash, .. } => {
                     let hash_bytes = hex::decode(code_hash.trim_start_matches("0x"))?;
                     if hash_bytes.len() != 32 {
                         anyhow::bail!("Code hash must be 32 bytes");
@@ -131,7 +131,7 @@ pub fn build_proposal_call(
                         format!("Authorize upgrade {}", code_hash),
                     ))
                 }
-                RuntimeAction::SetCode { wasm_hex } => {
+                RuntimeAction::SetCode { wasm_hex, .. } => {
                     let wasm_bytes = hex::decode(wasm_hex.trim_start_matches("0x"))?;
                     Ok((
                         subxt::dynamic::tx(

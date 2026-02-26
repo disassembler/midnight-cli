@@ -134,6 +134,12 @@ cargo run -- query events --section Council --method Proposed
 # Show all events (not just governance)
 cargo run -- query events --all
 
+# Query governance members (council and TA)
+cargo run -- query members --endpoint ws://localhost:9944
+
+# Query members with verbose output (include hex account IDs)
+cargo run -- query members --verbose
+
 # Create governance transactions (online machine)
 # Propose adding a council member
 cargo run -- tx propose membership council add-member 5GrwvaEF... \
@@ -145,10 +151,32 @@ cargo run -- tx propose membership ta remove-member 5DfhGyQd... \
   --endpoint ws://localhost:9944
 
 # Propose a system remark (council)
-cargo run -- tx propose system council remark "Governance test message"
+cargo run -- tx propose system council remark "Governance test message" \
+  --signer 5CD3C2Aa6QjxTLSF3R1av6Dwy8GKSB8kHfZkWbcJ7gb3t6Cx
 
 # Propose runtime upgrade authorization (TA)
-cargo run -- tx propose runtime ta authorize-upgrade 0xabcd1234...
+cargo run -- tx propose runtime ta authorize-upgrade 0xabcd1234... \
+  --signer 5GrwvaEF...
+
+# Vote on a proposal (council member approves)
+cargo run -- tx vote council \
+  --proposal-index 0 \
+  --approve \
+  --signer 5DfhGyQd...
+
+# Vote on a proposal (TA member rejects - note: no --approve flag means reject)
+cargo run -- tx vote ta \
+  --proposal-index 1 \
+  --signer 5GrwvaEF...
+
+# With optional parameters
+cargo run -- tx vote council \
+  --proposal-index 0 \
+  --proposal-hash 0x7d33c202... \
+  --approve \
+  --signer 5CD3C2Aa... \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./governance-payloads
 
 # Close a proposal after voting (council)
 cargo run -- tx close council \
@@ -281,6 +309,7 @@ The intended air-gap workflow for governance transactions:
 1. **Online machine**: Create governance proposal using `tx propose` command
    - Connects to Midnight node to fetch metadata and current state
    - Encodes proposal call using subxt with runtime metadata
+   - Calculates proper threshold (2/3 majority by default)
    - Generates signing payload with proper era, nonce, and chain context
    - Saves `.payload` and `.json` metadata files
 2. **Transfer**: Move payload and metadata files to air-gap machine via USB/QR
@@ -290,8 +319,12 @@ The intended air-gap workflow for governance transactions:
    - Creates signed extrinsic file
 4. **Transfer**: Move signed `.extrinsic` file back to online machine
 5. **Online machine**: Submit using `tx submit --extrinsic <file>`
-6. **Query**: Use `query proposals` and `query events` to monitor status
-7. **Close**: When voting complete, use `tx close` to execute the proposal
+6. **Query**: Use `query proposals` to see proposal status (pending votes)
+7. **Vote**: Each governance member votes using `tx vote` command
+   - Repeat steps 2-5 for each member who needs to vote
+   - Monitor votes with `query proposals` and `query events`
+8. **Close**: When threshold reached, use `tx close` to execute the proposal
+   - Repeat steps 2-5 to sign and submit the close transaction
 
 #### Legacy Workflow (manual payload encoding):
 1. **Online machine**: Manually fetch and encode governance proposal

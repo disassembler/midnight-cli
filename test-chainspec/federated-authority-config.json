@@ -1,0 +1,22 @@
+{
+  "council": {
+    "address": "addr_test1wq3zc4tj95nd22lgag4nhcjjmapl728wayyml375us60engf2ffwh",
+    "members": [
+      "0x7c7b89f7ab67928173eba8ce1c33ddd837ebfe24e7ffec7766b2dfec9273984f",
+      "0x24c905cff027c21ae42c3facf0842d38d4a63d5aa092759f734edfe89d4c1364",
+      "0x065b0bcf14726502eea125670ab86a8c90dd21e4151da6a7c4142191de43ac21"
+    ],
+    "members_mainchain": [],
+    "policy_id": "222c55722d26d52be8ea2b3be252df43ff28eee909bfc7d4e434fccd"
+  },
+  "technical_committee": {
+    "address": "addr_test1wq5sw7ukk9c0h5vfd9g72pyz6l9vvhz3ly245c3ph6hhwxsgd44za",
+    "members": [
+      "0x5cc84473036a71c5f2ca7519c7aaba13b92aa777ee2952c9b174163996c33666",
+      "0x501d4e4443d65e3f80b0e93024183ca8b91c645b48a797d8850538024a9d8e61",
+      "0x7e41f65d74810a1c2da19ac357c81e7facb76b66d44d842806884b9116f87d45"
+    ],
+    "members_mainchain": [],
+    "policy_id": "29077b96b170fbd1896951e50482d7cac65c51f9155a6221beaf771a"
+  }
+}

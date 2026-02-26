@@ -1,0 +1,11 @@
+{
+  "initial_permissioned_candidates": [
+    {
+      "aura_pub_key": "0x246aac794e91bca13fee95dd55722b1f1a903dd7953cf08f54c72e9b3ef76e7e",
+      "beefy_pub_key": "0x02a74a58f60c311fd4b7a8a11b76e8a5d0dee18b385525c66b396b993ad83e613f",
+      "grandpa_pub_key": "0xb30f7c0c841727b4c775b1948064fe2b26a984f6843f1c16bdc3fe1f80862e74",
+      "sidechain_pub_key": "0x02a74a58f60c311fd4b7a8a11b76e8a5d0dee18b385525c66b396b993ad83e613f"
+    }
+  ],
+  "permissioned_candidates_policy_id": "0x00000000000000000000000000000000000000000000000000000000"
+}

@@ -2,23 +2,12 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
-pub enum TxCommands {
-    /// Propose a governance action
-    Propose(ProposeArgs),
-    /// Vote on a governance proposal
-    Vote(VoteArgs),
-    /// Close and execute a proposal
-    Close(CloseArgs),
-    /// Submit a signed extrinsic to the network
-    Submit(SubmitArgs),
-}
-
-#[derive(Args)]
-pub struct ProposeArgs {
-    /// Proposal category
-    #[command(subcommand)]
-    pub proposal: ProposalType,
+/// Common transaction arguments shared across all tx commands
+#[derive(Args, Clone)]
+pub struct CommonTxArgs {
+    /// Signer address (must be a governance member)
+    #[arg(long)]
+    pub signer: Option<String>,
 
     /// WebSocket endpoint of the Midnight node
     #[arg(long, default_value = "ws://localhost:9944")]
@@ -36,9 +25,28 @@ pub struct ProposeArgs {
     #[arg(long)]
     pub state_file: Option<PathBuf>,
 
-    /// Signer address (must be a governance member)
-    #[arg(long, help = "Address to use as signer (must be Council or TA member)")]
-    pub signer: Option<String>,
+    /// Voting threshold (number of yes votes required). If not provided, calculates 2/3 majority.
+    #[arg(long)]
+    pub threshold: Option<u32>,
+}
+
+#[derive(Subcommand)]
+pub enum TxCommands {
+    /// Propose a governance action
+    Propose(ProposeArgs),
+    /// Vote on a governance proposal
+    Vote(VoteArgs),
+    /// Close and execute a proposal
+    Close(CloseArgs),
+    /// Submit a signed extrinsic to the network
+    Submit(SubmitArgs),
+}
+
+#[derive(Args)]
+pub struct ProposeArgs {
+    /// Proposal category
+    #[command(subcommand)]
+    pub proposal: ProposalType,
 }
 
 #[derive(Args)]
@@ -135,12 +143,16 @@ pub enum MembershipAction {
     /// Add a new member
     AddMember {
         /// Member address (SS58 format)
-        address: String
+        address: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Remove an existing member
     RemoveMember {
         /// Member address (SS58 format)
-        address: String
+        address: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Swap one member for another
     SwapMember {
@@ -148,11 +160,15 @@ pub enum MembershipAction {
         old_address: String,
         /// New member address
         new_address: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Reset the entire membership set
     ResetMembers {
         /// New member addresses
-        addresses: Vec<String>
+        addresses: Vec<String>,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Change a member's key
     ChangeKey {
@@ -160,14 +176,21 @@ pub enum MembershipAction {
         old_address: String,
         /// New member address
         new_address: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Set the prime member (tie-breaker for votes)
     SetPrime {
         /// Prime member address
-        address: String
+        address: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Clear the prime member
-    ClearPrime,
+    ClearPrime {
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
 }
 
 #[derive(Args)]
@@ -195,7 +218,9 @@ pub enum SystemAction {
     /// Post a remark message on-chain
     Remark {
         /// Message text
-        message: String
+        message: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
 }
 
@@ -225,11 +250,15 @@ pub enum RuntimeAction {
     AuthorizeUpgrade {
         /// Code hash to authorize
         code_hash: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
     /// Set new runtime code directly
     SetCode {
         /// WASM runtime code (hex-encoded)
         wasm_hex: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
     },
 }
 
@@ -374,6 +403,50 @@ fn extract_all_members(data_hex: Option<String>, body_name: &str) -> Result<Vec<
     Ok(members)
 }
 
+/// Extract common args from deeply nested proposal structure
+fn extract_propose_common(proposal: &ProposalType) -> &CommonTxArgs {
+    match proposal {
+        ProposalType::Membership(m) => match &m.body {
+            MembershipBody::Council(args) => match &args.action {
+                MembershipAction::AddMember { common, .. } => common,
+                MembershipAction::RemoveMember { common, .. } => common,
+                MembershipAction::SwapMember { common, .. } => common,
+                MembershipAction::ResetMembers { common, .. } => common,
+                MembershipAction::ChangeKey { common, .. } => common,
+                MembershipAction::SetPrime { common, .. } => common,
+                MembershipAction::ClearPrime { common } => common,
+            },
+            MembershipBody::Ta(args) => match &args.action {
+                MembershipAction::AddMember { common, .. } => common,
+                MembershipAction::RemoveMember { common, .. } => common,
+                MembershipAction::SwapMember { common, .. } => common,
+                MembershipAction::ResetMembers { common, .. } => common,
+                MembershipAction::ChangeKey { common, .. } => common,
+                MembershipAction::SetPrime { common, .. } => common,
+                MembershipAction::ClearPrime { common } => common,
+            },
+        },
+        ProposalType::System(s) => match &s.body {
+            SystemBody::Council(args) => match &args.action {
+                SystemAction::Remark { common, .. } => common,
+            },
+            SystemBody::Ta(args) => match &args.action {
+                SystemAction::Remark { common, .. } => common,
+            },
+        },
+        ProposalType::Runtime(r) => match &r.body {
+            RuntimeBody::Council(args) => match &args.action {
+                RuntimeAction::AuthorizeUpgrade { common, .. } => common,
+                RuntimeAction::SetCode { common, .. } => common,
+            },
+            RuntimeBody::Ta(args) => match &args.action {
+                RuntimeAction::AuthorizeUpgrade { common, .. } => common,
+                RuntimeAction::SetCode { common, .. } => common,
+            },
+        },
+    }
+}
+
 async fn handle_propose(args: ProposeArgs) -> Result<()> {
     use jsonrpsee::ws_client::WsClientBuilder;
     use jsonrpsee::core::client::ClientT;
@@ -383,12 +456,14 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     use std::fs;
     use sp_core::hashing::blake2_256;
 
-    eprintln!("🔗 Connecting to {}", args.endpoint);
+    let common = extract_propose_common(&args.proposal);
+
+    eprintln!("🔗 Connecting to {}", common.endpoint);
 
     // Connect with both RPC client (for queries) and subxt (for tx building)
-    let api = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&args.endpoint).await?;
+    let api = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&common.endpoint).await?;
     let client = WsClientBuilder::default()
-        .build(&args.endpoint)
+        .build(&common.endpoint)
         .await?;
 
     let chain: String = client.request("system_chain", rpc_params![]).await?;
@@ -402,9 +477,9 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("📊 Current block: {}", block_number);
     eprintln!("");
 
-    fs::create_dir_all(&args.output_dir)?;
+    fs::create_dir_all(&common.output_dir)?;
 
-    let state_path = args.state_file.clone().unwrap_or_else(|| args.output_dir.join("state.json"));
+    let state_path = common.state_file.clone().unwrap_or_else(|| common.output_dir.join("state.json"));
     let mut state: serde_json::Value = if state_path.exists() {
         serde_json::from_str(&fs::read_to_string(&state_path)?)?
     } else {
@@ -460,7 +535,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     };
 
     // Select or validate signer (BEFORE building any payloads)
-    let signer_address = if let Some(provided_signer) = &args.signer {
+    let signer_address = if let Some(provided_signer) = &common.signer {
         // Validate provided signer is a member
         if !available_members.contains(provided_signer) {
             eprintln!("❌ Error: Address {} is not a member of {}", provided_signer, body_name);
@@ -529,7 +604,24 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
         },
     };
 
-    let threshold = 1u32; // TODO: Calculate actual threshold
+    // Calculate threshold: 2/3 majority (matches runtime config)
+    // For Council and Technical Committee, both are configured with AtLeastTwoThirds
+    let member_count = available_members.len() as u32;
+    let threshold = common.threshold.unwrap_or_else(|| {
+        ((member_count * 2) + 2) / 3 // Ceiling division: ceil(n * 2/3)
+    });
+
+    if threshold > member_count {
+        eprintln!("❌ Error: Threshold ({}) cannot exceed member count ({})", threshold, member_count);
+        anyhow::bail!("Invalid threshold");
+    }
+
+    eprintln!("📊 Governance threshold: {} of {} members{}",
+        threshold,
+        member_count,
+        if common.threshold.is_some() { " (custom)" } else { " (2/3 majority)" }
+    );
+    eprintln!("");
 
     // Build the propose call using subxt
     let call_bytes = super::tx_builder::build_propose_call(
@@ -557,7 +649,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("");
 
     // Calculate era
-    let period = args.era_period;
+    let period = common.era_period;
     let period_pow2 = period.next_power_of_two().clamp(4, 65536);
     let period_encoded = (period_pow2.trailing_zeros() - 1).clamp(1, 15) as u8;
     let quantize_factor = (period_pow2 >> 12).max(1);
@@ -592,8 +684,8 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     let method_hex = format!("0x{}", hex::encode(&call_bytes));
 
     // Save files
-    let payload_file = args.output_dir.join(format!("{}.payload", filename));
-    let metadata_file = args.output_dir.join(format!("{}.json", filename));
+    let payload_file = common.output_dir.join(format!("{}.payload", filename));
+    let metadata_file = common.output_dir.join(format!("{}.json", filename));
 
     fs::write(&payload_file, &payload_hex)?;
     eprintln!("✓ Payload: {}", payload_file.display());
@@ -626,9 +718,9 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("        --tx-metadata {} \\", metadata_file.display());
     eprintln!("        --mnemonic-file <mnemonic> \\");
     eprintln!("        --purpose governance \\");
-    eprintln!("        --output {}/{}.extrinsic", args.output_dir.display(), filename);
+    eprintln!("        --output {}/{}.extrinsic", common.output_dir.display(), filename);
     eprintln!("   2. Submit:");
-    eprintln!("      midnight-cli tx submit --extrinsic {}/{}.extrinsic", args.output_dir.display(), filename);
+    eprintln!("      midnight-cli tx submit --extrinsic {}/{}.extrinsic", common.output_dir.display(), filename);
 
     Ok(())
 }
