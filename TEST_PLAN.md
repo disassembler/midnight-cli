@@ -478,6 +478,281 @@ jq -r '.cborHex' ./scratch/test2/governance.vkey
 # Should output identical CBOR hex strings
 ```
 
+### Scenario 11: Governance Transaction Creation and Submission
+
+**Purpose**: Create, sign, and submit governance proposals using the modern air-gap workflow
+
+**Prerequisites**:
+- Access to a running Midnight node (ws://localhost:9944)
+- Governance key generated from test mnemonic
+- Test mnemonic file available
+
+**Commands**:
+
+**Step 1 - Create Proposal (Online Machine)**:
+```bash
+mkdir -p ./scratch/governance-payloads
+
+# Create a governance proposal to add a council member
+midnight-cli tx propose membership council add-member 5GrwvaEF5jCorp7Dp9qUVeTSpznbvLzdUFXqEpaJR4fbdPj \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./scratch/governance-payloads
+```
+
+**Expected Output**:
+- Files created:
+  - `council-propose-membership.payload` (signing payload)
+  - `council-propose-membership.json` (transaction metadata)
+  - `state.json` (proposal hash and details)
+- Console output: "Proposal payload created successfully"
+
+**Step 2 - Sign on Air-Gap Machine**:
+```bash
+# Transfer payload and metadata files to air-gap machine, then:
+midnight-cli witness create-extrinsic \
+  --payload ./scratch/governance-payloads/council-propose-membership.payload \
+  --tx-metadata ./scratch/governance-payloads/council-propose-membership.json \
+  --mnemonic-file ./test.mnemonic \
+  --purpose governance \
+  --output ./scratch/governance-payloads/council-propose-membership.extrinsic
+```
+
+**Expected Output**:
+- File created: `council-propose-membership.extrinsic` (signed transaction)
+- Console output: "Signed extrinsic created successfully"
+
+**Step 3 - Submit to Network (Online Machine)**:
+```bash
+# Transfer signed extrinsic back to online machine, then:
+midnight-cli tx submit \
+  --extrinsic ./scratch/governance-payloads/council-propose-membership.extrinsic \
+  --endpoint ws://localhost:9944
+```
+
+**Expected Output**:
+- Console output: "Transaction submitted successfully"
+- Transaction hash displayed
+- Block number where transaction was included
+
+**Validation**:
+```bash
+# Query proposals to verify submission
+midnight-cli query proposals --verbose --endpoint ws://localhost:9944
+
+# Should show the newly created proposal with:
+# - Proposal index (e.g., 0)
+# - Call: Council.add_member
+# - Proposer: <your governance address>
+# - Threshold: 2 (or 2/3 of council members)
+# - Votes: Ayes: 1, Nays: 0
+```
+
+**Additional Transaction Types to Test**:
+```bash
+# System remark proposal
+midnight-cli tx propose system council remark "Test governance message" \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./scratch/governance-payloads
+
+# Vote on a proposal (approve)
+midnight-cli tx vote council \
+  --proposal-index 0 \
+  --approve \
+  --signer 5DfhGyQd... \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./scratch/governance-payloads
+
+# Close a proposal after voting completes
+midnight-cli tx close council \
+  --proposal-index 0 \
+  --state-file ./scratch/governance-payloads/state.json \
+  --endpoint ws://localhost:9944 \
+  --output-dir ./scratch/governance-payloads
+```
+
+### Scenario 12: Chain State Queries
+
+**Purpose**: Query blockchain state for governance proposals, events, and extrinsics
+
+**Prerequisites**:
+- Access to a running Midnight node (ws://localhost:9944)
+- Some transactions already submitted to query
+
+**Commands**:
+
+**Query Recent Extrinsics**:
+```bash
+midnight-cli query extrinsics \
+  --blocks 10 \
+  --endpoint ws://localhost:9944
+```
+
+**Expected Output**:
+- List of recent extrinsics with:
+  - Block number
+  - Extrinsic index
+  - Signer address (SS58 format)
+  - Call section and method (e.g., Council.propose)
+  - Success/failure status
+
+**Query Governance Proposals**:
+```bash
+# Basic query
+midnight-cli query proposals \
+  --endpoint ws://localhost:9944
+
+# Verbose output (includes more details)
+midnight-cli query proposals --verbose \
+  --endpoint ws://localhost:9944
+```
+
+**Expected Output**:
+- List of pending proposals with:
+  - Proposal index
+  - Proposal hash
+  - Call details (section.method)
+  - Proposer address
+  - Threshold (votes needed)
+  - Current votes (Ayes/Nays)
+  - Disapproval count
+
+**Query Events from Recent Blocks**:
+```bash
+# Last 5 blocks
+midnight-cli query events \
+  --blocks 5 \
+  --endpoint ws://localhost:9944
+
+# Specific block
+midnight-cli query events \
+  --block 1234 \
+  --endpoint ws://localhost:9944
+
+# Block range
+midnight-cli query events \
+  --from 1000 --to 1010 \
+  --endpoint ws://localhost:9944
+
+# Filter by section and method
+midnight-cli query events \
+  --section Council \
+  --method Proposed \
+  --endpoint ws://localhost:9944
+
+# Show all events (not just governance)
+midnight-cli query events --all \
+  --blocks 5 \
+  --endpoint ws://localhost:9944
+```
+
+**Expected Output**:
+- List of events with:
+  - Block number
+  - Event index
+  - Section.Method (e.g., Council.Proposed, System.ExtrinsicSuccess)
+  - Event data (decoded parameters)
+  - For governance events: addresses, proposal hashes, vote counts
+
+**Query Governance Members**:
+```bash
+midnight-cli query members \
+  --endpoint ws://localhost:9944
+
+# Verbose output (includes hex account IDs)
+midnight-cli query members --verbose \
+  --endpoint ws://localhost:9944
+```
+
+**Expected Output**:
+- Council members: List of SS58 addresses
+- TA members: List of SS58 addresses
+- Prime member (if set)
+- Member count for each governance body
+
+**Validation**:
+- All addresses should be valid SS58 format (starting with 5...)
+- Event data should be properly decoded (not raw hex)
+- Block numbers should be sequential and make sense
+- Proposal hashes should match state.json from tx propose commands
+
+### Scenario 13: Air-Gap Transaction Signing (witness create-extrinsic)
+
+**Purpose**: Sign pre-encoded governance transactions on an air-gapped machine
+
+**Prerequisites**:
+- Payload and metadata files created by `tx propose` command
+- Test mnemonic available
+- Air-gapped environment (no network access required)
+
+**Setup**:
+```bash
+mkdir -p ./scratch/airgap-test
+
+# First, create a proposal payload on online machine
+# (This would normally be done on a networked machine)
+# For testing, we'll create a mock payload and metadata
+echo "This is a test governance proposal payload" > ./scratch/airgap-test/test.payload
+
+# Create minimal metadata file
+cat > ./scratch/airgap-test/test.json << 'EOF'
+{
+  "call_data": "0x00112233",
+  "genesis_hash": "0xabcd1234...",
+  "spec_version": 1,
+  "tx_version": 1,
+  "era": "Immortal",
+  "nonce": 0,
+  "tip": 0,
+  "checkpoint_hash": "0xef567890..."
+}
+EOF
+```
+
+**Command**:
+```bash
+# Sign the payload on air-gapped machine
+midnight-cli witness create-extrinsic \
+  --payload ./scratch/airgap-test/test.payload \
+  --tx-metadata ./scratch/airgap-test/test.json \
+  --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
+  --purpose governance \
+  --output ./scratch/airgap-test/test.extrinsic
+```
+
+**Expected Output**:
+- Console shows:
+  - Payload hash for verification
+  - Signer address (derived from mnemonic)
+  - "Signed extrinsic created successfully"
+- File created: `test.extrinsic` (contains signed transaction ready for submission)
+
+**Validation**:
+```bash
+# Verify the extrinsic file was created
+test -f ./scratch/airgap-test/test.extrinsic && echo "✓ Extrinsic file created"
+
+# Check file is not empty and contains hex data
+cat ./scratch/airgap-test/test.extrinsic | grep -q "^0x" && echo "✓ Extrinsic contains hex data"
+
+# Verify the file size is reasonable (signed extrinsic should be ~200-500 bytes)
+stat -c%s ./scratch/airgap-test/test.extrinsic | awk '{if($1 > 100 && $1 < 1000) print "✓ Extrinsic file size reasonable:", $1, "bytes"; else print "✗ Unexpected file size:", $1}'
+```
+
+**Security Notes**:
+- This command works completely offline (air-gapped)
+- No network connection required
+- Mnemonic never leaves the air-gap machine
+- Payload hash should be manually verified against published proposal before signing
+- The signed extrinsic can be safely transferred back via USB/QR code
+
+**Integration with Transaction Workflow**:
+This command is Step 3 of the complete governance workflow:
+1. Online machine: `tx propose` → creates payload + metadata
+2. Transfer files to air-gap → via USB/QR
+3. Air-gap machine: `witness create-extrinsic` → signs payload
+4. Transfer back to online → signed extrinsic via USB/QR
+5. Online machine: `tx submit` → broadcasts to network
+
 ## Test Results Summary
 
 Run all test scenarios and record results:
@@ -498,6 +773,15 @@ Run all test scenarios and record results:
 | 8 | Witness verification (invalid) | ☐ Pass / ☐ Fail | |
 | 9 | GPG-encrypted mnemonic | ☐ Pass / ☐ Fail | |
 | 10 | Deterministic generation | ☐ Pass / ☐ Fail | |
+| 11 | tx propose (create proposal) | ☐ Pass / ☐ Fail | Requires node |
+| 11 | tx submit (submit signed tx) | ☐ Pass / ☐ Fail | Requires node |
+| 11 | tx vote (vote on proposal) | ☐ Pass / ☐ Fail | Requires node |
+| 11 | tx close (close proposal) | ☐ Pass / ☐ Fail | Requires node |
+| 12 | query extrinsics | ☐ Pass / ☐ Fail | Requires node |
+| 12 | query proposals | ☐ Pass / ☐ Fail | Requires node |
+| 12 | query events | ☐ Pass / ☐ Fail | Requires node |
+| 12 | query members | ☐ Pass / ☐ Fail | Requires node |
+| 13 | witness create-extrinsic | ☐ Pass / ☐ Fail | Air-gap signing |
 
 ## Command Reference
 
@@ -579,6 +863,108 @@ midnight-cli witness create \
 midnight-cli witness verify \
   --witness <witness.json> \
   --payload <payload-file>
+
+# Sign a transaction payload for air-gap submission (modern workflow)
+midnight-cli witness create-extrinsic \
+  --payload <payload-file> \
+  --tx-metadata <metadata.json> \
+  --mnemonic-file <path-to-mnemonic> \
+  --purpose <governance|payment|finality> \
+  [--index <N>] \
+  --output <signed-extrinsic-file>
+```
+
+### Transaction Commands
+
+```bash
+# Create a governance proposal (online machine)
+midnight-cli tx propose membership council add-member <address> \
+  [--endpoint ws://localhost:9944] \
+  [--output-dir <dir>]
+
+# Available proposal types:
+midnight-cli tx propose membership council add-member <address>
+midnight-cli tx propose membership council remove-member <address>
+midnight-cli tx propose membership council swap-member <old> <new>
+midnight-cli tx propose membership ta add-member <address>
+midnight-cli tx propose membership ta set-prime <address>
+midnight-cli tx propose system council remark "Message"
+midnight-cli tx propose system ta remark "Message"
+midnight-cli tx propose runtime ta authorize-upgrade <code-hash>
+midnight-cli tx propose runtime ta set-code <wasm-hex>
+
+# Vote on a proposal
+midnight-cli tx vote council \
+  --proposal-index <N> \
+  [--approve] \
+  --signer <address> \
+  [--endpoint ws://localhost:9944] \
+  [--output-dir <dir>]
+
+midnight-cli tx vote ta \
+  --proposal-index <N> \
+  [--approve] \
+  --signer <address>
+
+# Close a proposal after voting completes
+midnight-cli tx close council \
+  --proposal-index <N> \
+  [--state-file <state.json>] \
+  [--proposal-hash <hash>] \
+  [--proposal-length <bytes>] \
+  [--endpoint ws://localhost:9944] \
+  [--output-dir <dir>]
+
+# Submit a signed extrinsic to the network
+midnight-cli tx submit \
+  --extrinsic <extrinsic-file> \
+  [--endpoint ws://localhost:9944]
+```
+
+### Query Commands
+
+```bash
+# Query recent extrinsics (transactions)
+midnight-cli query extrinsics \
+  --blocks <N> \
+  [--endpoint ws://localhost:9944]
+
+# Query pending governance proposals
+midnight-cli query proposals \
+  [--verbose] \
+  [--endpoint ws://localhost:9944]
+
+# Query events from recent blocks
+midnight-cli query events \
+  --blocks <N> \
+  [--endpoint ws://localhost:9944]
+
+# Query events from specific block
+midnight-cli query events \
+  --block <block-number> \
+  [--endpoint ws://localhost:9944]
+
+# Query events from block range
+midnight-cli query events \
+  --from <start-block> \
+  --to <end-block> \
+  [--endpoint ws://localhost:9944]
+
+# Filter events by section and method
+midnight-cli query events \
+  --section <Section> \
+  --method <Method> \
+  [--endpoint ws://localhost:9944]
+
+# Show all events (not just governance and system)
+midnight-cli query events --all \
+  [--blocks <N>] \
+  [--endpoint ws://localhost:9944]
+
+# Query governance members (council and TA)
+midnight-cli query members \
+  [--verbose] \
+  [--endpoint ws://localhost:9944]
 ```
 
 ## Workflows
