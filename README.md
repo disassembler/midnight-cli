@@ -266,6 +266,24 @@ midnight-cli validator generate \
 
 # Outputs: node key (ed25519), aura key (sr25519), grandpa key (ed25519), BEEFY key (ecdsa)
 
+# Alternative: Export validator keys as seed files for midnight-node
+midnight-cli validator export-seeds \
+  [--mnemonic-file <path>] \
+  --output-dir <dir>
+
+# Outputs seed files that can be used with midnight-node flags:
+#   --aura-seed-file <dir>/aura-seed.txt
+#   --grandpa-seed-file <dir>/grandpa-seed.txt
+#   --cross-chain-seed-file <dir>/node-seed.txt
+
+# Alternative: Export validator keys as Substrate keystore
+midnight-cli validator export-keystore \
+  [--mnemonic-file <path>] \
+  --output-dir <dir>
+
+# Creates Substrate keystore directory that can be used with:
+#   midnight-node --keystore-path <dir>
+
 # Generate governance keys for TA/Council member
 midnight-cli governance generate \
   [--mnemonic-file <path>] \

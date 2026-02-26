@@ -195,6 +195,30 @@ cargo run -- tx submit \
   --extrinsic ./governance-payloads/council-propose-membership.extrinsic \
   --endpoint ws://localhost:9944
 
+# Generate validator keys for node operator
+cargo run -- validator generate \
+  --mnemonic-file mnemonic.txt \
+  --output validator-keys.json \
+  --write-key-files \
+  --key-files-dir ./validator-keys
+
+# Alternative: Export validator keys as seed files for midnight-node
+cargo run -- validator export-seeds \
+  --mnemonic-file mnemonic.txt \
+  --output-dir ./validator-seeds
+
+# Alternative: Export validator keys as Substrate keystore
+cargo run -- validator export-keystore \
+  --mnemonic-file mnemonic.txt \
+  --output-dir ./validator-keystore
+
+# Generate governance key for TA/Council member
+cargo run -- governance generate \
+  --mnemonic-file mnemonic.txt \
+  --output governance-key.json \
+  --write-key-files \
+  --key-files-dir ./governance-keys
+
 # Generate genesis and build chain spec (requires midnight-node in PATH)
 cargo run -- genesis init \
   --validator validator1.json \
