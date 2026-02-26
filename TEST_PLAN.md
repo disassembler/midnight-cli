@@ -50,7 +50,7 @@ cargo build --release
 
 **Command**:
 ```bash
-midnight-cli key generate --purpose governance --output ./keys/
+midnight-cli key generate --purpose governance --output-dir ./keys/
 ```
 
 **Expected Output**:
@@ -458,13 +458,13 @@ midnight-cli key generate \
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose governance \
-  --output ./scratch/test1/
+  --output-dir ./scratch/test1/
 
 # Generate same key second time
 midnight-cli key generate \
   --mnemonic "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title" \
   --purpose governance \
-  --output ./scratch/test2/
+  --output-dir ./scratch/test2/
 ```
 
 **Validation**:
@@ -505,19 +505,19 @@ Run all test scenarios and record results:
 
 ```bash
 # Generate governance or finality key (no index - one per wallet)
-midnight-cli key generate --purpose <governance|finality> --output <dir>
+midnight-cli key generate --purpose <governance|finality> --output-dir <dir>
 
 # Generate payment key (index required - multiple per wallet)
-midnight-cli key generate --purpose payment --index <N> --output <dir>
+midnight-cli key generate --purpose payment --index <N> --output-dir <dir>
 
 # Generate keys from existing mnemonic (CLI)
-midnight-cli key generate --mnemonic "<24-word phrase>" --purpose <type> [--index <N>] --output <dir>
+midnight-cli key generate --mnemonic "<24-word phrase>" --purpose <type> [--index <N>] --output-dir <dir>
 
 # Generate keys from mnemonic file
-midnight-cli key generate --mnemonic-file <path> --purpose <type> [--index <N>] --output <dir>
+midnight-cli key generate --mnemonic-file <path> --purpose <type> [--index <N>] --output-dir <dir>
 
 # Batch generate multiple payment keys
-midnight-cli key batch --mnemonic "<phrase>" --purposes payment --indices 0,1,2 --output <dir>
+midnight-cli key batch --mnemonic "<phrase>" --purposes payment --indices 0,1,2 --output-dir <dir>
 
 # Derive key on-demand (no file output)
 midnight-cli key derive --mnemonic "<phrase>" --derivation <path> --key-type <sr25519|ed25519> --purpose <type> --format <json|text>
@@ -589,12 +589,12 @@ midnight-cli witness verify \
 
 ```bash
 # Step 1: Generate mnemonic and governance key (offline, air-gapped machine)
-midnight-cli key generate --purpose governance --output /secure/keys/
+midnight-cli key generate --purpose governance --output-dir /secure/keys/
 # Save the mnemonic phrase in secure cold storage
 
 # Step 2: Generate batch of payment keys for future use
 midnight-cli key batch --mnemonic-file /secure/mnemonic.txt.asc \
-  --purposes payment --indices 0,1,2,3,4,5,6,7,8,9 --output /secure/keys/
+  --purposes payment --indices 0,1,2,3,4,5,6,7,8,9 --output-dir /secure/keys/
 
 # Step 3: Later, when signing is needed (air-gapped machine)
 # Transfer payload to air-gapped machine
