@@ -18,29 +18,34 @@ pub fn build_proposal_call(
             match action {
                 MembershipAction::AddMember { address } => {
                     let account_bytes = parse_ss58_address(address)?;
+                    let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account_bytes)]);
+                    let multi_address = Value::unnamed_variant("Id", vec![account_id]);
                     Ok((
-                        subxt::dynamic::tx(pallet_name, "add_member", vec![Value::from_bytes(&account_bytes)]),
+                        subxt::dynamic::tx(pallet_name, "add_member", vec![multi_address]),
                         format!("Add member {}", address),
                     ))
                 }
                 MembershipAction::RemoveMember { address } => {
                     let account_bytes = parse_ss58_address(address)?;
+                    let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account_bytes)]);
+                    let multi_address = Value::unnamed_variant("Id", vec![account_id]);
                     Ok((
-                        subxt::dynamic::tx(pallet_name, "remove_member", vec![Value::from_bytes(&account_bytes)]),
+                        subxt::dynamic::tx(pallet_name, "remove_member", vec![multi_address]),
                         format!("Remove member {}", address),
                     ))
                 }
                 MembershipAction::SwapMember { old_address, new_address } => {
                     let old_account = parse_ss58_address(old_address)?;
                     let new_account = parse_ss58_address(new_address)?;
+                    let old_id = Value::unnamed_composite(vec![Value::from_bytes(&old_account)]);
+                    let old_multi = Value::unnamed_variant("Id", vec![old_id]);
+                    let new_id = Value::unnamed_composite(vec![Value::from_bytes(&new_account)]);
+                    let new_multi = Value::unnamed_variant("Id", vec![new_id]);
                     Ok((
                         subxt::dynamic::tx(
                             pallet_name,
                             "swap_member",
-                            vec![
-                                Value::from_bytes(&old_account),
-                                Value::from_bytes(&new_account),
-                            ],
+                            vec![old_multi, new_multi],
                         ),
                         format!("Swap member {} → {}", old_address, new_address),
                     ))
@@ -63,22 +68,25 @@ pub fn build_proposal_call(
                 MembershipAction::ChangeKey { old_address, new_address } => {
                     let old_account = parse_ss58_address(old_address)?;
                     let new_account = parse_ss58_address(new_address)?;
+                    let old_id = Value::unnamed_composite(vec![Value::from_bytes(&old_account)]);
+                    let old_multi = Value::unnamed_variant("Id", vec![old_id]);
+                    let new_id = Value::unnamed_composite(vec![Value::from_bytes(&new_account)]);
+                    let new_multi = Value::unnamed_variant("Id", vec![new_id]);
                     Ok((
                         subxt::dynamic::tx(
                             pallet_name,
                             "change_key",
-                            vec![
-                                Value::from_bytes(&old_account),
-                                Value::from_bytes(&new_account),
-                            ],
+                            vec![old_multi, new_multi],
                         ),
                         format!("Change key {} → {}", old_address, new_address),
                     ))
                 }
                 MembershipAction::SetPrime { address } => {
                     let account = parse_ss58_address(address)?;
+                    let account_id = Value::unnamed_composite(vec![Value::from_bytes(&account)]);
+                    let multi_address = Value::unnamed_variant("Id", vec![account_id]);
                     Ok((
-                        subxt::dynamic::tx(pallet_name, "set_prime", vec![Value::from_bytes(&account)]),
+                        subxt::dynamic::tx(pallet_name, "set_prime", vec![multi_address]),
                         format!("Set prime member {}", address),
                     ))
                 }
@@ -184,6 +192,36 @@ pub async fn build_propose_call(
     call_bytes.extend_from_slice(&Compact(proposal_length).encode());
 
     Ok(call_bytes)
+}
+
+/// Build a Council or TA vote call
+pub async fn build_vote_call(
+    api: &OnlineClient<SubstrateConfig>,
+    is_council: bool,
+    proposal_hash: &str,
+    proposal_index: u32,
+    approve: bool,
+) -> Result<Vec<u8>> {
+    let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
+
+    let hash_bytes = hex::decode(proposal_hash.trim_start_matches("0x"))?;
+    if hash_bytes.len() != 32 {
+        anyhow::bail!("Proposal hash must be 32 bytes");
+    }
+
+    // Build the vote call: vote(proposal_hash, index, approve)
+    let vote_tx = subxt::dynamic::tx(
+        pallet_name,
+        "vote",
+        vec![
+            Value::from_bytes(&hash_bytes),
+            Value::u128(proposal_index as u128),
+            Value::bool(approve),
+        ],
+    );
+
+    let vote_bytes = api.tx().call_data(&vote_tx)?;
+    Ok(vote_bytes)
 }
 
 /// Build a Council or TA close call

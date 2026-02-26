@@ -24,6 +24,8 @@ pub enum QueryCommands {
     Proposals(ProposalsArgs),
     /// Query events from blocks
     Events(EventsArgs),
+    /// Query governance members (council and TA)
+    Members(MembersArgs),
 }
 
 #[derive(Args)]
@@ -71,6 +73,13 @@ pub struct EventsArgs {
     pub all: bool,
 }
 
+#[derive(Args)]
+pub struct MembersArgs {
+    /// Show verbose output (include account IDs in hex)
+    #[arg(long)]
+    pub verbose: bool,
+}
+
 pub async fn handle_query_command(args: QueryArgs) -> Result<()> {
     match args.command {
         QueryCommands::Extrinsics(extrinsics_args) => {
@@ -81,6 +90,9 @@ pub async fn handle_query_command(args: QueryArgs) -> Result<()> {
         }
         QueryCommands::Events(events_args) => {
             query_events(&args.endpoint, events_args).await
+        }
+        QueryCommands::Members(members_args) => {
+            query_members(&args.endpoint, members_args).await
         }
     }
 }
@@ -156,6 +168,61 @@ async fn query_proposals(endpoint: &str, args: ProposalsArgs) -> Result<()> {
     Ok(())
 }
 
+async fn query_members(endpoint: &str, args: MembersArgs) -> Result<()> {
+    eprintln!("🔗 Connecting to {}", endpoint);
+    let api = OnlineClient::<SubstrateConfig>::from_url(endpoint).await?;
+
+    println!("=== Council Members ===\n");
+    query_collective_members(&api, "Council", args.verbose).await?;
+
+    println!("\n=== Technical Authority Members ===\n");
+    query_collective_members(&api, "TechnicalCommittee", args.verbose).await?;
+
+    Ok(())
+}
+
+async fn query_collective_members(
+    api: &OnlineClient<SubstrateConfig>,
+    pallet: &str,
+    verbose: bool,
+) -> Result<()> {
+    use parity_scale_codec::Decode;
+    use subxt::dynamic::Value;
+    use sp_core::crypto::Ss58Codec;
+
+    // Query the Members storage (Vec<AccountId32>)
+    let members_addr = subxt::dynamic::storage(pallet, "Members", Vec::<Value>::new());
+    let members_data = api.storage().at_latest().await?.fetch(&members_addr).await?;
+
+    if let Some(data) = members_data {
+        let bytes = data.encoded();
+
+        // Decode Vec<AccountId32>
+        let members: Vec<sp_core::crypto::AccountId32> = Vec::<sp_core::crypto::AccountId32>::decode(&mut &bytes[..])?;
+
+        if members.is_empty() {
+            println!("No members");
+            return Ok(());
+        }
+
+        println!("Total members: {}\n", members.len());
+
+        for (idx, member) in members.iter().enumerate() {
+            let ss58_address = member.to_ss58check();
+            println!("{}. {}", idx + 1, ss58_address);
+
+            if verbose {
+                let bytes: &[u8] = member.as_ref();
+                println!("   Hex: 0x{}", hex::encode(bytes));
+            }
+        }
+    } else {
+        println!("No members (storage not found)");
+    }
+
+    Ok(())
+}
+
 async fn query_collective_proposals(
     api: &OnlineClient<SubstrateConfig>,
     pallet: &str,
@@ -183,10 +250,65 @@ async fn query_collective_proposals(
 
         for (i, hash) in proposal_hashes.iter().enumerate() {
             let hash_hex = format!("0x{}", hex::encode(hash.as_bytes()));
-            println!("\nProposal #{}: {}", i, hash_hex);
+            println!("\n📋 Proposal #{}", i);
+            println!("   Hash: {}", hash_hex);
+
+            // Query voting info (always, not just verbose)
+            let voting_addr = subxt::dynamic::storage(
+                pallet,
+                "Voting",
+                vec![Value::from_bytes(hash.as_bytes())]
+            );
+
+            if let Some(voting_data) = api.storage().at_latest().await?.fetch(&voting_addr).await? {
+                let voting_bytes = voting_data.encoded();
+
+                // Votes struct: { index: u32, threshold: u32, ayes: Vec<AccountId>, nays: Vec<AccountId>, end: BlockNumber }
+                if voting_bytes.len() >= 8 {
+                    let _index = u32::from_le_bytes([
+                        voting_bytes[0],
+                        voting_bytes[1],
+                        voting_bytes[2],
+                        voting_bytes[3],
+                    ]);
+                    let threshold = u32::from_le_bytes([
+                        voting_bytes[4],
+                        voting_bytes[5],
+                        voting_bytes[6],
+                        voting_bytes[7],
+                    ]);
+
+                    // Decode ayes/nays accounts
+                    if let Ok((ayes_accounts, nays_accounts, end_block)) = decode_vote_details(&voting_bytes[8..]) {
+                        let total_votes = ayes_accounts.len();
+                        let status = if total_votes >= threshold as usize {
+                            "✅ READY"
+                        } else {
+                            "⏳ PENDING"
+                        };
+
+                        println!("   Status: {} ({}/{} votes)", status, total_votes, threshold);
+                        println!("   Expires: Block {}", end_block);
+
+                        if !ayes_accounts.is_empty() {
+                            println!("   👍 Approved by ({}):", ayes_accounts.len());
+                            for (idx, account) in ayes_accounts.iter().enumerate() {
+                                println!("      {}. {}", idx + 1, account);
+                            }
+                        }
+
+                        if !nays_accounts.is_empty() {
+                            println!("   👎 Rejected by ({}):", nays_accounts.len());
+                            for (idx, account) in nays_accounts.iter().enumerate() {
+                                println!("      {}. {}", idx + 1, account);
+                            }
+                        }
+                    }
+                }
+            }
 
             if verbose {
-                // Query proposal call data
+                // Query proposal call data in verbose mode
                 let proposal_addr = subxt::dynamic::storage(
                     pallet,
                     "ProposalOf",
@@ -195,44 +317,8 @@ async fn query_collective_proposals(
 
                 if let Some(proposal_data) = api.storage().at_latest().await?.fetch(&proposal_addr).await? {
                     let proposal_bytes = proposal_data.encoded();
-                    println!("  Proposal data: {} bytes", proposal_bytes.len());
-                    println!("  Call: 0x{}", hex::encode(&proposal_bytes[..proposal_bytes.len().min(64)]));
-                }
-
-                // Query voting info
-                let voting_addr = subxt::dynamic::storage(
-                    pallet,
-                    "Voting",
-                    vec![Value::from_bytes(hash.as_bytes())]
-                );
-
-                if let Some(voting_data) = api.storage().at_latest().await?.fetch(&voting_addr).await? {
-                    let voting_bytes = voting_data.encoded();
-
-                    // Votes struct: { index: u32, threshold: u32, ayes: Vec<AccountId>, nays: Vec<AccountId>, end: BlockNumber }
-                    if voting_bytes.len() >= 8 {
-                        let index = u32::from_le_bytes([
-                            voting_bytes[0],
-                            voting_bytes[1],
-                            voting_bytes[2],
-                            voting_bytes[3],
-                        ]);
-                        let threshold = u32::from_le_bytes([
-                            voting_bytes[4],
-                            voting_bytes[5],
-                            voting_bytes[6],
-                            voting_bytes[7],
-                        ]);
-
-                        println!("  Index: {}", index);
-                        println!("  Threshold: {}", threshold);
-
-                        // Decode ayes/nays vectors from the remaining bytes
-                        if let Ok((ayes, nays)) = decode_vote_accounts(&voting_bytes[8..]) {
-                            println!("  Ayes: {}", ayes);
-                            println!("  Nays: {}", nays);
-                        }
-                    }
+                    println!("   Proposal data: {} bytes", proposal_bytes.len());
+                    println!("   Call (hex): 0x{}", hex::encode(&proposal_bytes[..proposal_bytes.len().min(64)]));
                 }
             }
         }
@@ -243,25 +329,45 @@ async fn query_collective_proposals(
     Ok(())
 }
 
-// Helper to decode ayes and nays counts from voting data
-fn decode_vote_accounts(data: &[u8]) -> Result<(usize, usize)> {
+// Helper to decode full voting details including voter addresses
+fn decode_vote_details(data: &[u8]) -> Result<(Vec<String>, Vec<String>, u32)> {
     use parity_scale_codec::{Compact, Decode};
+    use sp_core::crypto::Ss58Codec;
 
     let mut cursor = &data[..];
 
-    // Decode ayes count
+    // Decode ayes Vec<AccountId>
     let ayes_count = <Compact<u32>>::decode(&mut cursor)?.0 as usize;
+    let mut ayes_accounts = Vec::new();
 
-    // Skip ayes accounts (32 bytes each)
-    if cursor.len() < ayes_count * 32 {
-        anyhow::bail!("Not enough data for ayes accounts");
+    for _ in 0..ayes_count {
+        if cursor.len() < 32 {
+            anyhow::bail!("Not enough data for ayes account");
+        }
+        let account_bytes: [u8; 32] = cursor[..32].try_into()?;
+        let account = sp_core::sr25519::Public::from_raw(account_bytes);
+        ayes_accounts.push(account.to_ss58check());
+        cursor = &cursor[32..];
     }
-    cursor = &cursor[ayes_count * 32..];
 
-    // Decode nays count
+    // Decode nays Vec<AccountId>
     let nays_count = <Compact<u32>>::decode(&mut cursor)?.0 as usize;
+    let mut nays_accounts = Vec::new();
 
-    Ok((ayes_count, nays_count))
+    for _ in 0..nays_count {
+        if cursor.len() < 32 {
+            anyhow::bail!("Not enough data for nays account");
+        }
+        let account_bytes: [u8; 32] = cursor[..32].try_into()?;
+        let account = sp_core::sr25519::Public::from_raw(account_bytes);
+        nays_accounts.push(account.to_ss58check());
+        cursor = &cursor[32..];
+    }
+
+    // Decode end block number (u32)
+    let end_block = u32::decode(&mut cursor)?;
+
+    Ok((ayes_accounts, nays_accounts, end_block))
 }
 
 async fn query_events(endpoint: &str, args: EventsArgs) -> Result<()> {

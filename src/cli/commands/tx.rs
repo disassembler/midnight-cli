@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub enum TxCommands {
     /// Propose a governance action
     Propose(ProposeArgs),
+    /// Vote on a governance proposal
+    Vote(VoteArgs),
     /// Close and execute a proposal
     Close(CloseArgs),
     /// Submit a signed extrinsic to the network
@@ -37,6 +39,65 @@ pub struct ProposeArgs {
     /// Signer address (must be a governance member)
     #[arg(long, help = "Address to use as signer (must be Council or TA member)")]
     pub signer: Option<String>,
+}
+
+#[derive(Args)]
+pub struct VoteArgs {
+    /// Governance body
+    #[command(subcommand)]
+    pub body: VoteBody,
+}
+
+#[derive(Subcommand)]
+pub enum VoteBody {
+    /// Vote on a Council proposal
+    Council {
+        /// Proposal index
+        #[arg(long)]
+        proposal_index: u32,
+        /// Proposal hash (optional, can be queried from chain)
+        #[arg(long)]
+        proposal_hash: Option<String>,
+        /// Vote approve (true) or reject (false)
+        #[arg(long)]
+        approve: bool,
+        /// Signer address (must be a Council member)
+        #[arg(long)]
+        signer: Option<String>,
+        /// WebSocket endpoint of the Midnight node
+        #[arg(long, default_value = "ws://localhost:9944")]
+        endpoint: String,
+        /// Output directory for payload and metadata files
+        #[arg(long, default_value = "./governance-payloads")]
+        output_dir: PathBuf,
+        /// Era period in blocks (default: 64)
+        #[arg(long, default_value = "64")]
+        era_period: u64,
+    },
+    /// Vote on a Technical Authority proposal
+    Ta {
+        /// Proposal index
+        #[arg(long)]
+        proposal_index: u32,
+        /// Proposal hash (optional, can be queried from chain)
+        #[arg(long)]
+        proposal_hash: Option<String>,
+        /// Vote approve (true) or reject (false)
+        #[arg(long)]
+        approve: bool,
+        /// Signer address (must be a TA member)
+        #[arg(long)]
+        signer: Option<String>,
+        /// WebSocket endpoint of the Midnight node
+        #[arg(long, default_value = "ws://localhost:9944")]
+        endpoint: String,
+        /// Output directory for payload and metadata files
+        #[arg(long, default_value = "./governance-payloads")]
+        output_dir: PathBuf,
+        /// Era period in blocks (default: 64)
+        #[arg(long, default_value = "64")]
+        era_period: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -177,26 +238,6 @@ pub struct CloseArgs {
     /// Governance body
     #[command(subcommand)]
     pub body: CloseBody,
-
-    /// WebSocket endpoint of the Midnight node
-    #[arg(long, default_value = "ws://localhost:9944")]
-    pub endpoint: String,
-
-    /// Output directory for payload and metadata files
-    #[arg(long, default_value = "./governance-payloads")]
-    pub output_dir: PathBuf,
-
-    /// Era period in blocks (default: 64)
-    #[arg(long, default_value = "64")]
-    pub era_period: u64,
-
-    /// State file for multi-step governance workflows
-    #[arg(long)]
-    pub state_file: Option<PathBuf>,
-
-    /// Signer address (must be a governance member)
-    #[arg(long, help = "Address to use as signer (must be Council or TA member)")]
-    pub signer: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -212,6 +253,21 @@ pub enum CloseBody {
         /// Proposal length (optional, from state file if not provided)
         #[arg(long)]
         proposal_length: Option<u32>,
+        /// Signer address (must be a Council member)
+        #[arg(long)]
+        signer: Option<String>,
+        /// WebSocket endpoint of the Midnight node
+        #[arg(long, default_value = "ws://localhost:9944")]
+        endpoint: String,
+        /// Output directory for payload and metadata files
+        #[arg(long, default_value = "./governance-payloads")]
+        output_dir: PathBuf,
+        /// Era period in blocks (default: 64)
+        #[arg(long, default_value = "64")]
+        era_period: u64,
+        /// State file for multi-step governance workflows
+        #[arg(long)]
+        state_file: Option<PathBuf>,
     },
     /// Close a Technical Authority proposal
     Ta {
@@ -224,6 +280,21 @@ pub enum CloseBody {
         /// Proposal length (optional, from state file if not provided)
         #[arg(long)]
         proposal_length: Option<u32>,
+        /// Signer address (must be a TA member)
+        #[arg(long)]
+        signer: Option<String>,
+        /// WebSocket endpoint of the Midnight node
+        #[arg(long, default_value = "ws://localhost:9944")]
+        endpoint: String,
+        /// Output directory for payload and metadata files
+        #[arg(long, default_value = "./governance-payloads")]
+        output_dir: PathBuf,
+        /// Era period in blocks (default: 64)
+        #[arg(long, default_value = "64")]
+        era_period: u64,
+        /// State file for multi-step governance workflows
+        #[arg(long)]
+        state_file: Option<PathBuf>,
     },
 }
 
@@ -241,6 +312,7 @@ pub struct SubmitArgs {
 pub async fn handle_tx_command(command: TxCommands) -> Result<()> {
     match command {
         TxCommands::Propose(args) => handle_propose(args).await,
+        TxCommands::Vote(args) => handle_vote(args).await,
         TxCommands::Close(args) => handle_close(args).await,
         TxCommands::Submit(args) => handle_submit(args).await,
     }
@@ -561,6 +633,245 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     Ok(())
 }
 
+async fn handle_vote(args: VoteArgs) -> Result<()> {
+    use jsonrpsee::ws_client::WsClientBuilder;
+    use jsonrpsee::core::client::ClientT;
+    use jsonrpsee::rpc_params;
+    use parity_scale_codec::{Compact, Encode};
+    use serde_json::json;
+    use std::fs;
+    use sp_core::hashing::blake2_256;
+
+    // Extract fields from VoteBody variant
+    let (is_council, proposal_index, proposal_hash_opt, approve, signer, endpoint, output_dir, era_period) = match &args.body {
+        VoteBody::Council { proposal_index, proposal_hash, approve, signer, endpoint, output_dir, era_period } => {
+            (true, *proposal_index, proposal_hash.clone(), *approve, signer.clone(), endpoint.clone(), output_dir.clone(), *era_period)
+        }
+        VoteBody::Ta { proposal_index, proposal_hash, approve, signer, endpoint, output_dir, era_period } => {
+            (false, *proposal_index, proposal_hash.clone(), *approve, signer.clone(), endpoint.clone(), output_dir.clone(), *era_period)
+        }
+    };
+
+    eprintln!("🔗 Connecting to {}", endpoint);
+
+    let api = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&endpoint).await?;
+    let client = WsClientBuilder::default().build(&endpoint).await?;
+
+    let chain: String = client.request("system_chain", rpc_params![]).await?;
+    let header: serde_json::Value = client.request("chain_getHeader", rpc_params![]).await?;
+    let block_number = header["number"]
+        .as_str()
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+        .unwrap_or(0);
+
+    eprintln!("✅ Connected to: {}", chain);
+    eprintln!("📊 Current block: {}", block_number);
+    eprintln!("");
+
+    fs::create_dir_all(&output_dir)?;
+
+    // Query governance members
+    eprintln!("👥 Querying governance members...");
+    let council_storage_key = format!("0x{}{}",
+        hex::encode(sp_core::hashing::twox_128(b"CouncilMembership")),
+        hex::encode(sp_core::hashing::twox_128(b"Members"))
+    );
+    let council_data_hex: Option<String> = client
+        .request("state_getStorage", rpc_params![council_storage_key])
+        .await?;
+
+    let ta_storage_key = format!("0x{}{}",
+        hex::encode(sp_core::hashing::twox_128(b"TechnicalCommitteeMembership")),
+        hex::encode(sp_core::hashing::twox_128(b"Members"))
+    );
+    let ta_data_hex: Option<String> = client
+        .request("state_getStorage", rpc_params![ta_storage_key])
+        .await?;
+
+    let council_members = extract_all_members(council_data_hex, "Council")?;
+    let ta_members = extract_all_members(ta_data_hex, "Technical Authority")?;
+
+    eprintln!("   Council members: {}", council_members.len());
+    eprintln!("   Technical Authority members: {}", ta_members.len());
+    eprintln!("");
+
+    // Query proposal hash if not provided
+    let proposal_hash = if let Some(h) = proposal_hash_opt {
+        h
+    } else {
+        query_proposal_hash(&client, is_council, proposal_index).await?
+    };
+
+    let (available_members, body_name, filename) = if is_council {
+        (council_members, "Council", "council-vote")
+    } else {
+        (ta_members, "Technical Authority", "ta-vote")
+    };
+
+    // Validate signer
+    let signer_address = if let Some(provided_signer) = &signer {
+        if !available_members.contains(provided_signer) {
+            eprintln!("❌ Error: Address {} is not a member of {}", provided_signer, body_name);
+            eprintln!();
+            eprintln!("Available {} members:", body_name);
+            for (idx, member) in available_members.iter().enumerate() {
+                eprintln!("  {}. {}", idx + 1, member);
+            }
+            anyhow::bail!("Invalid signer address");
+        }
+        provided_signer.clone()
+    } else {
+        eprintln!("❌ Error: No signer address specified");
+        eprintln!();
+        eprintln!("Available {} members:", body_name);
+        for (idx, member) in available_members.iter().enumerate() {
+            eprintln!("  {}. {}", idx + 1, member);
+        }
+        eprintln!();
+        eprintln!("Example: --signer {}", available_members[0]);
+        anyhow::bail!("Missing required --signer argument");
+    };
+
+    eprintln!("✓ Using signer: {}", signer_address);
+    eprintln!("");
+    eprintln!("🗳️  Vote details:");
+    eprintln!("   Proposal index: {}", proposal_index);
+    eprintln!("   Proposal hash: {}", proposal_hash);
+    eprintln!("   Vote: {}", if approve { "✅ APPROVE" } else { "❌ REJECT" });
+    eprintln!("");
+
+    // Build the vote call
+    let call_bytes = super::tx_builder::build_vote_call(&api, is_council, &proposal_hash, proposal_index, approve).await?;
+
+    // Get nonce and build signing payload
+    let nonce: u64 = client.request("system_accountNextIndex", rpc_params![signer_address.clone()]).await?;
+    let genesis_hash_hex: String = client.request("chain_getBlockHash", rpc_params![0]).await?;
+    let block_hash_hex: String = client.request("chain_getBlockHash", rpc_params![]).await?;
+    let runtime_version: serde_json::Value = client.request("state_getRuntimeVersion", rpc_params![]).await?;
+    let spec_version = runtime_version["specVersion"].as_u64().unwrap_or(0) as u32;
+    let transaction_version = runtime_version["transactionVersion"].as_u64().unwrap_or(0) as u32;
+
+    eprintln!("📝 Transaction details:");
+    eprintln!("   Signer: {}", signer_address);
+    eprintln!("   Nonce: {}", nonce);
+    eprintln!("");
+
+    // Calculate era
+    let period = era_period;
+    let period_pow2 = period.next_power_of_two().clamp(4, 65536);
+    let period_encoded = (period_pow2.trailing_zeros() - 1).clamp(1, 15) as u8;
+    let quantize_factor = (period_pow2 >> 12).max(1);
+    let phase = (block_number / quantize_factor) % (period_pow2 / quantize_factor);
+    let phase_encoded = (phase as u16) << 4 | period_encoded as u16;
+    let era_bytes = if phase_encoded < 256 {
+        vec![phase_encoded as u8]
+    } else {
+        vec![(phase_encoded & 0xff) as u8, (phase_encoded >> 8) as u8]
+    };
+    let era_hex = format!("0x{}", hex::encode(&era_bytes));
+
+    // Construct signing payload
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&call_bytes);
+    payload.extend_from_slice(&era_bytes);
+    payload.extend_from_slice(&Compact(nonce).encode());
+    payload.extend_from_slice(&spec_version.to_le_bytes());
+    payload.extend_from_slice(&transaction_version.to_le_bytes());
+    let genesis_hash_bytes = hex::decode(genesis_hash_hex.trim_start_matches("0x"))?;
+    payload.extend_from_slice(&genesis_hash_bytes);
+    let block_hash_bytes = hex::decode(block_hash_hex.trim_start_matches("0x"))?;
+    payload.extend_from_slice(&block_hash_bytes);
+
+    let final_payload = if payload.len() > 256 {
+        blake2_256(&payload).to_vec()
+    } else {
+        payload
+    };
+
+    let payload_hex = format!("0x{}", hex::encode(&final_payload));
+    let method_hex = format!("0x{}", hex::encode(&call_bytes));
+
+    // Save files
+    let payload_file = output_dir.join(format!("{}.payload", filename));
+    let metadata_file = output_dir.join(format!("{}.json", filename));
+
+    fs::write(&payload_file, &payload_hex)?;
+    eprintln!("✓ Payload: {}", payload_file.display());
+
+    let metadata = json!({
+        "step": filename,
+        "signerAddress": signer_address,
+        "nonce": nonce,
+        "payload": payload_hex,
+        "method": method_hex,
+        "era": era_hex,
+        "tip": 0,
+        "specVersion": spec_version,
+        "transactionVersion": transaction_version,
+        "genesisHash": genesis_hash_hex,
+        "blockHash": block_hash_hex,
+        "proposalIndex": proposal_index,
+        "proposalHash": proposal_hash,
+        "approve": approve,
+        "createdAt": chrono::Utc::now().to_rfc3339()
+    });
+
+    fs::write(&metadata_file, serde_json::to_string_pretty(&metadata)?)?;
+    eprintln!("   Data: {}", metadata_file.display());
+
+    eprintln!("");
+    eprintln!("📋 Next steps:");
+    eprintln!("   1. Sign on airgapped computer:");
+    eprintln!("      midnight-cli witness create-extrinsic \\");
+    eprintln!("        --payload {} \\", payload_file.display());
+    eprintln!("        --tx-metadata {} \\", metadata_file.display());
+    eprintln!("        --mnemonic-file <mnemonic> \\");
+    eprintln!("        --purpose governance \\");
+    eprintln!("        --output {}/{}.extrinsic", output_dir.display(), filename);
+    eprintln!("   2. Submit:");
+    eprintln!("      midnight-cli tx submit --extrinsic {}/{}.extrinsic", output_dir.display(), filename);
+
+    Ok(())
+}
+
+/// Query proposal hash from chain state
+async fn query_proposal_hash(
+    client: &jsonrpsee::ws_client::WsClient,
+    is_council: bool,
+    proposal_index: u32,
+) -> Result<String> {
+    use jsonrpsee::core::client::ClientT;
+    use jsonrpsee::rpc_params;
+    use parity_scale_codec::Decode;
+
+    let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
+
+    // Query Proposals storage - it's a Vec<Hash>, not a map
+    let storage_key = format!("0x{}{}",
+        hex::encode(sp_core::hashing::twox_128(pallet_name.as_bytes())),
+        hex::encode(sp_core::hashing::twox_128(b"Proposals"))
+    );
+
+    let data_hex: Option<String> = client
+        .request("state_getStorage", rpc_params![storage_key])
+        .await?;
+
+    let data_hex = data_hex.ok_or_else(|| anyhow::anyhow!("No proposals found in {}", pallet_name))?;
+
+    // Decode the Vec<Hash>
+    let data = hex::decode(data_hex.trim_start_matches("0x"))?;
+    let mut data_slice = &data[..];
+    let proposals: Vec<[u8; 32]> = Vec::<[u8; 32]>::decode(&mut data_slice)
+        .map_err(|e| anyhow::anyhow!("Failed to decode proposals vec: {}", e))?;
+
+    if (proposal_index as usize) >= proposals.len() {
+        anyhow::bail!("Proposal index {} out of range (only {} active proposals)", proposal_index, proposals.len());
+    }
+
+    let proposal_hash = proposals[proposal_index as usize];
+    Ok(format!("0x{}", hex::encode(proposal_hash)))
+}
+
 async fn handle_close(args: CloseArgs) -> Result<()> {
     use jsonrpsee::ws_client::WsClientBuilder;
     use jsonrpsee::core::client::ClientT;
@@ -570,12 +881,22 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     use std::fs;
     use sp_core::hashing::blake2_256;
 
-    eprintln!("🔗 Connecting to {}", args.endpoint);
+    // Extract fields from CloseBody variant
+    let (is_council, proposal_index, proposal_hash_opt, proposal_length_opt, signer, endpoint, output_dir, era_period, state_file) = match &args.body {
+        CloseBody::Council { proposal_index, proposal_hash, proposal_length, signer, endpoint, output_dir, era_period, state_file } => {
+            (true, *proposal_index, proposal_hash.clone(), *proposal_length, signer.clone(), endpoint.clone(), output_dir.clone(), *era_period, state_file.clone())
+        }
+        CloseBody::Ta { proposal_index, proposal_hash, proposal_length, signer, endpoint, output_dir, era_period, state_file } => {
+            (false, *proposal_index, proposal_hash.clone(), *proposal_length, signer.clone(), endpoint.clone(), output_dir.clone(), *era_period, state_file.clone())
+        }
+    };
+
+    eprintln!("🔗 Connecting to {}", endpoint);
 
     // Connect with both RPC client (for queries) and subxt (for tx building)
-    let api = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&args.endpoint).await?;
+    let api = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&endpoint).await?;
     let client = WsClientBuilder::default()
-        .build(&args.endpoint)
+        .build(&endpoint)
         .await?;
 
     let chain: String = client.request("system_chain", rpc_params![]).await?;
@@ -589,9 +910,9 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     eprintln!("📊 Current block: {}", block_number);
     eprintln!("");
 
-    fs::create_dir_all(&args.output_dir)?;
+    fs::create_dir_all(&output_dir)?;
 
-    let state_path = args.state_file.clone().unwrap_or_else(|| args.output_dir.join("state.json"));
+    let state_path = state_file.clone().unwrap_or_else(|| output_dir.join("state.json"));
     let mut state: serde_json::Value = if state_path.exists() {
         serde_json::from_str(&fs::read_to_string(&state_path)?)?
     } else {
@@ -625,35 +946,22 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     eprintln!("   Technical Authority members: {}", ta_members.len());
     eprintln!();
 
-    let (is_council, proposal_index, proposal_hash, proposal_length, filename, state_key) = match &args.body {
-        CloseBody::Council { proposal_index, proposal_hash, proposal_length } => {
-            let hash = proposal_hash.clone()
-                .or_else(|| state.get("proposalHash").and_then(|v| v.as_str()).map(String::from))
-                .ok_or_else(|| anyhow::anyhow!("Missing proposal hash"))?;
-            let length = proposal_length.unwrap_or_else(||
-                state.get("proposalLength").and_then(|v| v.as_u64()).unwrap_or(0) as u32
-            );
-            (true, *proposal_index, hash, length, "council-close", "councilProposalIndex")
-        }
-        CloseBody::Ta { proposal_index, proposal_hash, proposal_length } => {
-            let hash = proposal_hash.clone()
-                .or_else(|| state.get("proposalHash").and_then(|v| v.as_str()).map(String::from))
-                .ok_or_else(|| anyhow::anyhow!("Missing proposal hash"))?;
-            let length = proposal_length.unwrap_or_else(||
-                state.get("proposalLength").and_then(|v| v.as_u64()).unwrap_or(0) as u32
-            );
-            (false, *proposal_index, hash, length, "ta-close", "taProposalIndex")
-        }
-    };
+    // Get proposal hash and length from args or state file
+    let proposal_hash = proposal_hash_opt
+        .or_else(|| state.get("proposalHash").and_then(|v| v.as_str()).map(String::from))
+        .ok_or_else(|| anyhow::anyhow!("Missing proposal hash"))?;
+    let proposal_length = proposal_length_opt.unwrap_or_else(||
+        state.get("proposalLength").and_then(|v| v.as_u64()).unwrap_or(0) as u32
+    );
 
-    let (available_members, body_name) = if is_council {
-        (council_members, "Council")
+    let (available_members, body_name, filename, state_key) = if is_council {
+        (council_members, "Council", "council-close", "councilProposalIndex")
     } else {
-        (ta_members, "Technical Authority")
+        (ta_members, "Technical Authority", "ta-close", "taProposalIndex")
     };
 
     // Select or validate signer
-    let signer_address = if let Some(provided_signer) = &args.signer {
+    let signer_address = if let Some(provided_signer) = &signer {
         // Validate provided signer is a member
         if !available_members.contains(provided_signer) {
             eprintln!("❌ Error: Address {} is not a member of {}", provided_signer, body_name);
@@ -717,7 +1025,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     eprintln!("");
 
     // Calculate era
-    let period = args.era_period;
+    let period = era_period;
     let period_pow2 = period.next_power_of_two().clamp(4, 65536);
     let period_encoded = (period_pow2.trailing_zeros() - 1).clamp(1, 15) as u8;
     let quantize_factor = (period_pow2 >> 12).max(1);
@@ -752,8 +1060,8 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     let method_hex = format!("0x{}", hex::encode(&call_bytes));
 
     // Save files
-    let payload_file = args.output_dir.join(format!("{}.payload", filename));
-    let metadata_file = args.output_dir.join(format!("{}.json", filename));
+    let payload_file = output_dir.join(format!("{}.payload", filename));
+    let metadata_file = output_dir.join(format!("{}.json", filename));
 
     fs::write(&payload_file, &payload_hex)?;
     eprintln!("✓ Payload: {}", payload_file.display());
