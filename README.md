@@ -264,7 +264,7 @@ midnight-cli validator generate \
   [--write-key-files] \
   [--key-files-dir <dir>]
 
-# Outputs: node key (ed25519), aura key (sr25519), grandpa key (ed25519)
+# Outputs: node key (ed25519), aura key (sr25519), grandpa key (ed25519), BEEFY key (ecdsa)
 
 # Generate governance keys for TA/Council member
 midnight-cli governance generate \
