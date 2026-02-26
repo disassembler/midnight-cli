@@ -6,6 +6,7 @@ use crate::storage::{CardanoKeyFile, KeyReader};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Subcommand)]
 pub enum KeyCommands {

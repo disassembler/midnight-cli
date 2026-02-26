@@ -475,7 +475,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
 
     eprintln!("✅ Connected to: {}", chain);
     eprintln!("📊 Current block: {}", block_number);
-    eprintln!("");
+    eprintln!();
 
     fs::create_dir_all(&common.output_dir)?;
 
@@ -510,7 +510,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
 
     eprintln!("   Council members: {}", council_members.len());
     eprintln!("   Technical Authority members: {}", ta_members.len());
-    eprintln!("");
+    eprintln!();
 
     // Determine which body is proposing (early check for signer validation)
     let is_council = match &args.proposal {
@@ -567,7 +567,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     };
 
     eprintln!("✓ Using signer: {}", signer_address);
-    eprintln!("");
+    eprintln!();
 
     // Build the proposal call using subxt
     let (proposal_payload, proposal_description) = super::tx_builder::build_proposal_call(&args.proposal)?;
@@ -581,7 +581,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("📝 Proposal: {}", proposal_description);
     eprintln!("   Hash: {}", proposal_hash_hex);
     eprintln!("   Length: {} bytes", proposal_length);
-    eprintln!("");
+    eprintln!();
 
     // Save proposal to state
     state["proposalCall"] = json!(proposal_hex);
@@ -608,7 +608,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     // For Council and Technical Committee, both are configured with AtLeastTwoThirds
     let member_count = available_members.len() as u32;
     let threshold = common.threshold.unwrap_or_else(|| {
-        ((member_count * 2) + 2) / 3 // Ceiling division: ceil(n * 2/3)
+        (member_count * 2).div_ceil(3) // Ceiling division: ceil(n * 2/3)
     });
 
     if threshold > member_count {
@@ -621,7 +621,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
         member_count,
         if common.threshold.is_some() { " (custom)" } else { " (2/3 majority)" }
     );
-    eprintln!("");
+    eprintln!();
 
     // Build the propose call using subxt
     let call_bytes = super::tx_builder::build_propose_call(
@@ -646,7 +646,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("📝 Transaction details:");
     eprintln!("   Signer: {}", signer_address);
     eprintln!("   Nonce: {}", nonce);
-    eprintln!("");
+    eprintln!();
 
     // Calculate era
     let period = common.era_period;
@@ -710,7 +710,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
 
     fs::write(&state_path, serde_json::to_string_pretty(&state)?)?;
 
-    eprintln!("");
+    eprintln!();
     eprintln!("📋 Next steps:");
     eprintln!("   1. Sign on airgapped computer:");
     eprintln!("      midnight-cli witness create-extrinsic \\");
@@ -758,7 +758,7 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
 
     eprintln!("✅ Connected to: {}", chain);
     eprintln!("📊 Current block: {}", block_number);
-    eprintln!("");
+    eprintln!();
 
     fs::create_dir_all(&output_dir)?;
 
@@ -785,7 +785,7 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
 
     eprintln!("   Council members: {}", council_members.len());
     eprintln!("   Technical Authority members: {}", ta_members.len());
-    eprintln!("");
+    eprintln!();
 
     // Query proposal hash if not provided
     let proposal_hash = if let Some(h) = proposal_hash_opt {
@@ -825,12 +825,12 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
     };
 
     eprintln!("✓ Using signer: {}", signer_address);
-    eprintln!("");
+    eprintln!();
     eprintln!("🗳️  Vote details:");
     eprintln!("   Proposal index: {}", proposal_index);
     eprintln!("   Proposal hash: {}", proposal_hash);
     eprintln!("   Vote: {}", if approve { "✅ APPROVE" } else { "❌ REJECT" });
-    eprintln!("");
+    eprintln!();
 
     // Build the vote call
     let call_bytes = super::tx_builder::build_vote_call(&api, is_council, &proposal_hash, proposal_index, approve).await?;
@@ -846,7 +846,7 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
     eprintln!("📝 Transaction details:");
     eprintln!("   Signer: {}", signer_address);
     eprintln!("   Nonce: {}", nonce);
-    eprintln!("");
+    eprintln!();
 
     // Calculate era
     let period = era_period;
@@ -911,7 +911,7 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
     fs::write(&metadata_file, serde_json::to_string_pretty(&metadata)?)?;
     eprintln!("   Data: {}", metadata_file.display());
 
-    eprintln!("");
+    eprintln!();
     eprintln!("📋 Next steps:");
     eprintln!("   1. Sign on airgapped computer:");
     eprintln!("      midnight-cli witness create-extrinsic \\");
@@ -1000,7 +1000,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
 
     eprintln!("✅ Connected to: {}", chain);
     eprintln!("📊 Current block: {}", block_number);
-    eprintln!("");
+    eprintln!();
 
     fs::create_dir_all(&output_dir)?;
 
@@ -1114,7 +1114,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     eprintln!("   Index: {}", proposal_index);
     eprintln!("   Signer: {}", signer_address);
     eprintln!("   Nonce: {}", nonce);
-    eprintln!("");
+    eprintln!();
 
     // Calculate era
     let period = era_period;
@@ -1178,7 +1178,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
 
     fs::write(&state_path, serde_json::to_string_pretty(&state)?)?;
 
-    eprintln!("");
+    eprintln!();
     eprintln!("📋 Next steps:");
     eprintln!("   1. Sign and submit as before");
 
@@ -1199,14 +1199,14 @@ async fn handle_submit(args: SubmitArgs) -> Result<()> {
 
     let chain: String = client.request("system_chain", rpc_params![]).await?;
     eprintln!("✅ Connected to: {}", chain);
-    eprintln!("");
+    eprintln!();
 
     let extrinsic_hex = fs::read_to_string(&args.extrinsic)?.trim().to_string();
 
     eprintln!("📝 Submitting extrinsic...");
     eprintln!("   Hex: {}...", &extrinsic_hex[..extrinsic_hex.len().min(66)]);
     eprintln!("   Length: {} bytes", (extrinsic_hex.len() - 2) / 2);
-    eprintln!("");
+    eprintln!();
 
     let tx_hash: String = client
         .request("author_submitExtrinsic", rpc_params![extrinsic_hex])

@@ -48,7 +48,7 @@ impl Gpg {
 
         // Run gpg --decrypt
         let output = Command::new("gpg")
-            .args(&["--decrypt", "--quiet", "--batch"])
+            .args(["--decrypt", "--quiet", "--batch"])
             .arg(path)
             .output()
             .map_err(|e| DomainError::GpgDecryptionFailed {

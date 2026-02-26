@@ -58,7 +58,7 @@ pub fn build_proposal_call(
                     let accounts = accounts?;
                     let values: Vec<Value> = accounts
                         .iter()
-                        .map(|bytes| Value::from_bytes(bytes))
+                        .map(Value::from_bytes)
                         .collect();
                     Ok((
                         subxt::dynamic::tx(pallet_name, "reset_members", vec![Value::unnamed_composite(values)]),

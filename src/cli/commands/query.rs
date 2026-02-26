@@ -334,7 +334,7 @@ fn decode_vote_details(data: &[u8]) -> Result<(Vec<String>, Vec<String>, u32)> {
     use parity_scale_codec::{Compact, Decode};
     use sp_core::crypto::Ss58Codec;
 
-    let mut cursor = &data[..];
+    let mut cursor = data;
 
     // Decode ayes Vec<AccountId>
     let ayes_count = <Compact<u32>>::decode(&mut cursor)?.0 as usize;

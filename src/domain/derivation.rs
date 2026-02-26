@@ -105,7 +105,7 @@ impl MidnightKeyPath {
     }
 
     /// Convert to derivation path segments
-    pub fn to_derivation_path(&self) -> Vec<DerivationSegment> {
+    pub fn to_derivation_path(self) -> Vec<DerivationSegment> {
         match self {
             Self::Governance(index) => vec![
                 DerivationSegment::new("midnight"),
@@ -150,7 +150,7 @@ impl MidnightKeyPath {
     }
 
     /// Format as a string path for display
-    pub fn to_string_path(&self) -> String {
+    pub fn to_string_path(self) -> String {
         format!("//midnight//{}//{}",
             self.purpose().as_str(),
             self.index())

@@ -92,7 +92,7 @@ impl SuriParser {
     fn split_seed_and_derivations(s: &str) -> DomainResult<(&str, &str)> {
         // Find the first derivation delimiter
         let hard_pos = s.find("//");
-        let soft_pos = s.find('/').filter(|&p| hard_pos.map_or(true, |h| p != h));
+        let soft_pos = s.find('/').filter(|&p| hard_pos != Some(p));
 
         let split_pos = match (hard_pos, soft_pos) {
             (Some(h), Some(s)) => Some(h.min(s)),

@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 /// secp256k1 payment key operations
 pub struct Secp256k1Payment;
 
+#[allow(dead_code)]
 impl Secp256k1Payment {
     /// Hardening constant for BIP-32
     #[allow(dead_code)]
@@ -37,7 +38,7 @@ impl Secp256k1Payment {
         let path_str = path.to_string_path();
 
         // Derive child key directly from seed
-        let child_xprv = XPrv::derive_from_path(&seed, &path_str.parse()
+        let child_xprv = XPrv::derive_from_path(seed, &path_str.parse()
             .map_err(|e| DomainError::CryptoError(format!("Invalid derivation path: {:?}", e)))?)
             .map_err(|e| DomainError::CryptoError(format!("Derivation failed: {}", e)))?;
 

@@ -341,10 +341,10 @@ fn handle_export_seeds(args: ExportSeedsArgs) -> Result<()> {
     let beefy_seed = beefy_seed_opt
         .ok_or_else(|| anyhow::anyhow!("No seed returned for beefy key"))?;
 
-    let node_seed_hex = format!("0x{}", hex::encode(&node_seed));
-    let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
-    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
-    let beefy_seed_hex = format!("0x{}", hex::encode(&beefy_seed));
+    let node_seed_hex = format!("0x{}", hex::encode(node_seed));
+    let aura_seed_hex = format!("0x{}", hex::encode(aura_seed));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(grandpa_seed));
+    let beefy_seed_hex = format!("0x{}", hex::encode(beefy_seed));
 
     // Write seed files
     let node_seed_path = args.output_dir.join("node-seed.txt");
@@ -407,7 +407,7 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
     // Derive keys using same paths as validator generate
     // Use from_string_with_seed to get the proper derived seed that can reconstruct the keypair
     let node_suri = format!("{}//midnight//node", mnemonic_str);
-    let (node_pair, node_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&node_suri, None)
+    let (_node_pair, node_seed_opt) = sp_core::ed25519::Pair::from_string_with_seed(&node_suri, None)
         .map_err(|e| anyhow::anyhow!("Ed25519 node key derivation failed: {:?}", e))?;
 
     let aura_suri = format!("{}//midnight//aura", mnemonic_str);
@@ -439,10 +439,10 @@ fn handle_export_keystore(args: ExportKeystoreArgs) -> Result<()> {
     let beefy_seed = beefy_seed_opt
         .ok_or_else(|| anyhow::anyhow!("No seed returned for beefy key"))?;
 
-    let node_seed_hex = format!("0x{}", hex::encode(&node_seed));
-    let aura_seed_hex = format!("0x{}", hex::encode(&aura_seed));
-    let grandpa_seed_hex = format!("0x{}", hex::encode(&grandpa_seed));
-    let beefy_seed_hex = format!("0x{}", hex::encode(&beefy_seed));
+    let _node_seed_hex = format!("0x{}", hex::encode(node_seed));
+    let aura_seed_hex = format!("0x{}", hex::encode(aura_seed));
+    let grandpa_seed_hex = format!("0x{}", hex::encode(grandpa_seed));
+    let beefy_seed_hex = format!("0x{}", hex::encode(beefy_seed));
 
     // Create keystore files
     // Keystore filename format: key_type_hex + public_key_hex

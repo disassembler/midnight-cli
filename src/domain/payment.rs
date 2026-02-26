@@ -12,6 +12,7 @@
 use super::error::{DomainError, DomainResult};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// BIP-44 roles for Midnight payment keys
 /// These correspond to different types of addresses in the Midnight wallet
@@ -31,9 +32,10 @@ pub enum PaymentRole {
     Metadata,
 }
 
+#[allow(dead_code)]
 impl PaymentRole {
     /// Get the numeric role value for BIP-44 derivation
-    pub fn to_u32(&self) -> u32 {
+    pub fn to_u32(self) -> u32 {
         match self {
             Self::UnshieldedExternal => 0,
             Self::UnshieldedInternal => 1,
@@ -68,9 +70,18 @@ impl PaymentRole {
             Self::Metadata => "metadata",
         }
     }
+}
 
-    /// Parse from string
-    pub fn from_str(s: &str) -> DomainResult<Self> {
+impl fmt::Display for PaymentRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for PaymentRole {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "unshielded-external" | "unshielded_external" | "external" => {
                 Ok(Self::UnshieldedExternal)
@@ -86,12 +97,6 @@ impl PaymentRole {
                 s
             ))),
         }
-    }
-}
-
-impl fmt::Display for PaymentRole {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
     }
 }
 
@@ -112,6 +117,7 @@ pub struct Bip32Path {
     pub index: u32,
 }
 
+#[allow(dead_code)]
 impl Bip32Path {
     /// Midnight's BIP-44 coin type
     pub const MIDNIGHT_COIN_TYPE: u32 = 2400;

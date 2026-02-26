@@ -1,6 +1,7 @@
-use super::error::{DomainError, DomainResult};
+use super::error::DomainError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// Unique identifier for cryptographic key types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,16 +14,6 @@ pub enum KeyTypeId {
 }
 
 impl KeyTypeId {
-    pub fn from_str(s: &str) -> DomainResult<Self> {
-        match s.to_lowercase().as_str() {
-            "sr25519" => Ok(Self::Sr25519),
-            "ed25519" => Ok(Self::Ed25519),
-            "secp256k1" => Ok(Self::Secp256k1),
-            "ecdsa" => Ok(Self::Ecdsa),
-            _ => Err(DomainError::InvalidKeyType(s.to_string())),
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Sr25519 => "sr25519",
@@ -39,6 +30,20 @@ impl fmt::Display for KeyTypeId {
     }
 }
 
+impl FromStr for KeyTypeId {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "sr25519" => Ok(Self::Sr25519),
+            "ed25519" => Ok(Self::Ed25519),
+            "secp256k1" => Ok(Self::Secp256k1),
+            "ecdsa" => Ok(Self::Ecdsa),
+            _ => Err(DomainError::InvalidKeyType(s.to_string())),
+        }
+    }
+}
+
 /// The purpose/role of a key in the Midnight network
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,15 +54,6 @@ pub enum KeyPurpose {
 }
 
 impl KeyPurpose {
-    pub fn from_str(s: &str) -> DomainResult<Self> {
-        match s.to_lowercase().as_str() {
-            "governance" => Ok(Self::Governance),
-            "payment" => Ok(Self::Payment),
-            "finality" => Ok(Self::Finality),
-            _ => Err(DomainError::InvalidKeyPurpose(s.to_string())),
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Governance => "governance",
@@ -110,6 +106,19 @@ impl KeyPurpose {
 impl fmt::Display for KeyPurpose {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for KeyPurpose {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "governance" => Ok(Self::Governance),
+            "payment" => Ok(Self::Payment),
+            "finality" => Ok(Self::Finality),
+            _ => Err(DomainError::InvalidKeyPurpose(s.to_string())),
+        }
     }
 }
 

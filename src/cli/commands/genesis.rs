@@ -414,7 +414,7 @@ async fn generate_chainspec_configs(
 
     // Query UTxORPC for policy ID block info if endpoint provided
     let (block_hash_hex, block_number, block_timestamp, tx_index) = if let Some(ref utxorpc_endpoint) = args.utxorpc {
-        if let Some(ref policy_id) = genesis.night_token.as_ref().and_then(|t| Some(&t.policy_id)) {
+        if let Some(policy_id) = genesis.night_token.as_ref().map(|t| &t.policy_id) {
             eprintln!("🔍 Querying UTxORPC endpoint for policy ID block info...");
             match crate::utxorpc::query_policy_id_block(utxorpc_endpoint, policy_id).await {
                 Ok((block_hash, slot, timestamp, tx_idx)) => {

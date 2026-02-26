@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sp_core::hashing::blake2_256;
 use std::io::{self, Write};
 use std::path::Path;
+use std::str::FromStr;
 
 /// Witness output format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +71,15 @@ pub struct TransactionMetadata {
     pub block_hash: String,
 }
 
+/// Signer data for witness creation
+struct SignerData<'a> {
+    signature: &'a [u8],
+    public_key: &'a [u8],
+    key_type: KeyTypeId,
+    ss58_address: Option<String>,
+    derivation_path: Option<String>,
+}
+
 /// Witness creation use case
 pub struct WitnessCreation;
 
@@ -103,12 +113,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: Some(ss58_address),
+                        derivation_path: None,
+                    },
                     purpose,
-                    Some(ss58_address),
-                    None,
                     description,
                 )
             }
@@ -120,12 +132,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: Some(ss58_address),
+                        derivation_path: None,
+                    },
                     purpose,
-                    Some(ss58_address),
-                    None,
                     description,
                 )
             }
@@ -136,12 +150,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: None, // ECDSA doesn't have SS58 address
+                        derivation_path: None,
+                    },
                     purpose,
-                    None, // ECDSA doesn't have SS58 address
-                    None,
                     description,
                 )
             }
@@ -184,12 +200,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: Some(ss58_address),
+                        derivation_path: Some(derivation_path.to_string()),
+                    },
                     purpose,
-                    Some(ss58_address),
-                    Some(derivation_path.to_string()),
                     description,
                 )
             }
@@ -201,12 +219,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: Some(ss58_address),
+                        derivation_path: Some(derivation_path.to_string()),
+                    },
                     purpose,
-                    Some(ss58_address),
-                    Some(derivation_path.to_string()),
                     description,
                 )
             }
@@ -217,12 +237,14 @@ impl WitnessCreation {
 
                 Self::create_witness_output(
                     &payload_bytes,
-                    signature.as_ref(),
-                    public.as_ref(),
-                    key_type,
+                    SignerData {
+                        signature: signature.as_ref(),
+                        public_key: public.as_ref(),
+                        key_type,
+                        ss58_address: None, // ECDSA doesn't have SS58 address
+                        derivation_path: Some(derivation_path.to_string()),
+                    },
                     purpose,
-                    None, // ECDSA doesn't have SS58 address
-                    Some(derivation_path.to_string()),
                     description,
                 )
             }
@@ -364,18 +386,14 @@ impl WitnessCreation {
     /// Create witness output structure
     fn create_witness_output(
         payload_bytes: &[u8],
-        signature: &[u8],
-        public_key: &[u8],
-        key_type: KeyTypeId,
+        signer: SignerData,
         purpose: KeyPurpose,
-        ss58_address: Option<String>,
-        derivation_path: Option<String>,
         description: Option<String>,
     ) -> DomainResult<WitnessOutput> {
         let payload_hash = blake2_256(payload_bytes);
         let payload_hash_hex = format!("0x{}", hex::encode(payload_hash));
-        let signature_hex = format!("0x{}", hex::encode(signature));
-        let public_key_hex = format!("0x{}", hex::encode(public_key));
+        let signature_hex = format!("0x{}", hex::encode(signer.signature));
+        let public_key_hex = format!("0x{}", hex::encode(signer.public_key));
 
         Ok(WitnessOutput {
             version: "1.0".to_string(),
@@ -385,12 +403,12 @@ impl WitnessCreation {
                 size: payload_bytes.len(),
             },
             signature: SignatureInfo {
-                sig_type: key_type.as_str().to_string(),
+                sig_type: signer.key_type.as_str().to_string(),
                 value: signature_hex,
                 signer: SignerInfo {
                     public_key: public_key_hex,
-                    ss58_address,
-                    derivation_path,
+                    ss58_address: signer.ss58_address,
+                    derivation_path: signer.derivation_path,
                 },
             },
             metadata: WitnessMetadata {
