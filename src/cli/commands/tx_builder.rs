@@ -262,6 +262,7 @@ pub async fn build_close_call(
     }
 
     // Use subxt's dynamic API for close call
+    // Use max Weight values (u64::MAX) to ensure we don't under-bound
     let close_tx = subxt::dynamic::tx(
         pallet_name,
         "close",
@@ -269,8 +270,8 @@ pub async fn build_close_call(
             Value::from_bytes(&hash_bytes),
             Value::u128(proposal_index as u128),
             Value::unnamed_composite(vec![
-                Value::u128(1000000000), // ref_time
-                Value::u128(1000000),    // proof_size
+                Value::u128(u64::MAX as u128), // ref_time (max)
+                Value::u128(u64::MAX as u128), // proof_size (max)
             ]),
             Value::u128(proposal_length as u128),
         ],
