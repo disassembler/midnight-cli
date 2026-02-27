@@ -252,7 +252,7 @@ pub async fn build_close_call(
     proposal_index: u32,
     proposal_length: u32,
 ) -> Result<Vec<u8>> {
-    use parity_scale_codec::{Compact, Encode};
+    use subxt::dynamic::Value;
 
     let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
 
@@ -261,31 +261,23 @@ pub async fn build_close_call(
         anyhow::bail!("Proposal hash must be 32 bytes");
     }
 
-    // Get pallet and call indices from metadata
-    let metadata = api.metadata();
-    let pallet = metadata
-        .pallet_by_name(pallet_name)
-        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", pallet_name))?;
-    let pallet_index = pallet.index();
+    // Use subxt's dynamic API for close call
+    let close_tx = subxt::dynamic::tx(
+        pallet_name,
+        "close",
+        vec![
+            Value::from_bytes(&hash_bytes),
+            Value::u128(proposal_index as u128),
+            Value::unnamed_composite(vec![
+                Value::u128(1000000000), // ref_time
+                Value::u128(1000000),    // proof_size
+            ]),
+            Value::u128(proposal_length as u128),
+        ],
+    );
 
-    let close_call = pallet
-        .call_variant_by_name("close")
-        .ok_or_else(|| anyhow::anyhow!("Call 'close' not found in {}", pallet_name))?;
-    let call_index = close_call.index;
-
-    // Manually encode: pallet_index | call_index | hash | Compact(index) | Weight | Compact(length)
-    // Weight is encoded as: Compact(ref_time) | Compact(proof_size)
-    let mut call_bytes = Vec::new();
-    call_bytes.push(pallet_index);
-    call_bytes.push(call_index);
-    call_bytes.extend_from_slice(&hash_bytes);
-    call_bytes.extend_from_slice(&Compact(proposal_index).encode());
-    // Weight bound (generous values)
-    call_bytes.extend_from_slice(&Compact(1000000000u64).encode()); // ref_time
-    call_bytes.extend_from_slice(&Compact(1000000u64).encode());    // proof_size
-    call_bytes.extend_from_slice(&Compact(proposal_length).encode());
-
-    Ok(call_bytes)
+    let close_bytes = api.tx().call_data(&close_tx)?;
+    Ok(close_bytes)
 }
 
 /// Parse an SS58 address to raw account bytes
