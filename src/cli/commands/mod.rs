@@ -7,6 +7,7 @@ pub mod mnemonic;
 pub mod tx;
 mod tx_builder;
 pub mod query;
+pub mod debug;
 
 pub use key::{handle_key_command, KeyCommands};
 pub use witness::{handle_witness_command, WitnessCommands};
@@ -16,3 +17,4 @@ pub use genesis::{handle_genesis_command, GenesisCommands};
 pub use mnemonic::{handle_mnemonic_command, MnemonicCommands};
 pub use tx::{handle_tx_command, TxCommands};
 pub use query::{handle_query_command, QueryArgs};
+pub use debug::{handle_debug_command, DebugArgs};

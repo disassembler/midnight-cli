@@ -457,6 +457,9 @@ impl WitnessCreation {
         // Encode nonce as Compact<u64>
         let nonce_bytes = Compact(tx_metadata.nonce).encode();
 
+        // Encode tip as Compact<u128> (must match what was signed)
+        let tip_bytes = Compact(tx_metadata.tip as u128).encode();
+
         // Decode method from hex
         let method_hex = tx_metadata.method.strip_prefix("0x").unwrap_or(&tx_metadata.method);
         let method_bytes = hex::decode(method_hex)?;
@@ -468,8 +471,7 @@ impl WitnessCreation {
         extrinsic.extend_from_slice(&signature_bytes);
         extrinsic.extend_from_slice(&era_bytes);
         extrinsic.extend_from_slice(&nonce_bytes);
-        // Note: tip is NOT included in the extrinsic when it's 0
-        // The Midnight runtime doesn't use the CheckBalanceTransfer signed extension
+        extrinsic.extend_from_slice(&tip_bytes);
         extrinsic.extend_from_slice(&method_bytes);
 
         // Add compact length prefix

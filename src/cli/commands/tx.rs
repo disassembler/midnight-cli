@@ -667,6 +667,7 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     payload.extend_from_slice(&call_bytes);
     payload.extend_from_slice(&era_bytes);
     payload.extend_from_slice(&Compact(nonce).encode());
+    payload.extend_from_slice(&Compact(0u128).encode()); // tip
     payload.extend_from_slice(&spec_version.to_le_bytes());
     payload.extend_from_slice(&transaction_version.to_le_bytes());
     let genesis_hash_bytes = hex::decode(genesis_hash_hex.trim_start_matches("0x"))?;
@@ -867,6 +868,7 @@ async fn handle_vote(args: VoteArgs) -> Result<()> {
     payload.extend_from_slice(&call_bytes);
     payload.extend_from_slice(&era_bytes);
     payload.extend_from_slice(&Compact(nonce).encode());
+    payload.extend_from_slice(&Compact(0u128).encode()); // tip
     payload.extend_from_slice(&spec_version.to_le_bytes());
     payload.extend_from_slice(&transaction_version.to_le_bytes());
     let genesis_hash_bytes = hex::decode(genesis_hash_hex.trim_start_matches("0x"))?;
@@ -1135,6 +1137,7 @@ async fn handle_close(args: CloseArgs) -> Result<()> {
     payload.extend_from_slice(&call_bytes);
     payload.extend_from_slice(&era_bytes);
     payload.extend_from_slice(&Compact(nonce).encode());
+    payload.extend_from_slice(&Compact(0u128).encode()); // tip
     payload.extend_from_slice(&spec_version.to_le_bytes());
     payload.extend_from_slice(&transaction_version.to_le_bytes());
     let genesis_hash_bytes = hex::decode(genesis_hash_hex.trim_start_matches("0x"))?;

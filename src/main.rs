@@ -11,9 +11,9 @@ mod utxorpc;
 use cli::{
     handle_key_command, handle_witness_command, handle_validator_command,
     handle_governance_command, handle_genesis_command, handle_mnemonic_command,
-    handle_tx_command, handle_query_command, KeyCommands, WitnessCommands,
+    handle_tx_command, handle_query_command, handle_debug_command, KeyCommands, WitnessCommands,
     ValidatorCommands, GovernanceCommands, GenesisCommands, MnemonicCommands,
-    TxCommands, QueryArgs,
+    TxCommands, QueryArgs, DebugArgs,
 };
 
 #[derive(Parser)]
@@ -57,6 +57,9 @@ enum Commands {
 
     /// Query chain state
     Query(QueryArgs),
+
+    /// Debug utilities for transaction analysis
+    Debug(DebugArgs),
 }
 
 #[tokio::main]
@@ -72,5 +75,6 @@ async fn main() -> Result<()> {
         Commands::Mnemonic(mnemonic_cmd) => handle_mnemonic_command(mnemonic_cmd),
         Commands::Tx(tx_cmd) => handle_tx_command(tx_cmd).await,
         Commands::Query(query_cmd) => handle_query_command(query_cmd).await,
+        Commands::Debug(debug_cmd) => handle_debug_command(debug_cmd),
     }
 }

@@ -26,6 +26,8 @@ pub enum QueryCommands {
     Events(EventsArgs),
     /// Query governance members (council and TA)
     Members(MembersArgs),
+    /// Inspect runtime metadata for pallet calls
+    Metadata(MetadataArgs),
 }
 
 #[derive(Args)]
@@ -80,6 +82,17 @@ pub struct MembersArgs {
     pub verbose: bool,
 }
 
+#[derive(Args)]
+pub struct MetadataArgs {
+    /// Pallet name to inspect
+    #[arg(long)]
+    pub pallet: String,
+
+    /// Call name to inspect (optional, shows all calls if not specified)
+    #[arg(long)]
+    pub call: Option<String>,
+}
+
 pub async fn handle_query_command(args: QueryArgs) -> Result<()> {
     match args.command {
         QueryCommands::Extrinsics(extrinsics_args) => {
@@ -93,6 +106,9 @@ pub async fn handle_query_command(args: QueryArgs) -> Result<()> {
         }
         QueryCommands::Members(members_args) => {
             query_members(&args.endpoint, members_args).await
+        }
+        QueryCommands::Metadata(metadata_args) => {
+            query_metadata(&args.endpoint, metadata_args).await
         }
     }
 }
@@ -480,6 +496,118 @@ async fn query_events(endpoint: &str, args: EventsArgs) -> Result<()> {
             }
             println!();
         }
+    }
+
+    Ok(())
+}
+
+async fn query_metadata(endpoint: &str, args: MetadataArgs) -> Result<()> {
+    eprintln!("🔗 Connecting to {}", endpoint);
+    let api = OnlineClient::<SubstrateConfig>::from_url(endpoint).await?;
+    let metadata = api.metadata();
+
+    eprintln!("✅ Connected\n");
+
+    // Find the pallet
+    let pallet = metadata
+        .pallet_by_name(&args.pallet)
+        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", args.pallet))?;
+
+    println!("=== Pallet: {} ===", args.pallet);
+    println!("Index: {}", pallet.index());
+    println!();
+
+    // Get call type
+    let call_ty_id = pallet
+        .call_ty_id()
+        .ok_or_else(|| anyhow::anyhow!("Pallet {} has no calls", args.pallet))?;
+
+    let call_type = metadata
+        .types()
+        .resolve(call_ty_id)
+        .ok_or_else(|| anyhow::anyhow!("Call type not found"))?;
+
+    if let scale_info::TypeDef::Variant(v) = &call_type.type_def {
+        let variants_to_show: Vec<_> = if let Some(call_name) = &args.call {
+            v.variants
+                .iter()
+                .filter(|var| var.name == *call_name)
+                .collect()
+        } else {
+            v.variants.iter().collect()
+        };
+
+        if variants_to_show.is_empty() {
+            anyhow::bail!("Call '{}' not found in pallet '{}'", args.call.as_ref().unwrap(), args.pallet);
+        }
+
+        for variant in variants_to_show {
+            println!("Call: {}", variant.name);
+            println!("  Index: {}", variant.index);
+
+            if variant.fields.is_empty() {
+                println!("  Fields: (none)");
+            } else {
+                println!("  Fields:");
+                for field in &variant.fields {
+                    let field_name = field
+                        .name
+                        .as_ref()
+                        .map(|s| s.as_str())
+                        .unwrap_or("(unnamed)");
+
+                    println!("    - {}: type_id={}", field_name, field.ty.id);
+
+                    // Resolve the type to show more details
+                    if let Some(resolved_type) = metadata.types().resolve(field.ty.id) {
+                        if !resolved_type.path.segments.is_empty() {
+                            println!("      path: {}", resolved_type.path.segments.join("::"));
+                        }
+
+                        match &resolved_type.type_def {
+                            scale_info::TypeDef::Composite(c) => {
+                                println!("      kind: Composite");
+                                if !c.fields.is_empty() {
+                                    println!("      composite fields:");
+                                    for comp_field in &c.fields {
+                                        let comp_name = comp_field
+                                            .name
+                                            .as_ref()
+                                            .map(|s| s.as_str())
+                                            .unwrap_or("(unnamed)");
+                                        println!("        * {}: type_id={}", comp_name, comp_field.ty.id);
+                                    }
+                                }
+                            }
+                            scale_info::TypeDef::Variant(v) => {
+                                println!("      kind: Variant ({} variants)", v.variants.len());
+                            }
+                            scale_info::TypeDef::Sequence(s) => {
+                                println!("      kind: Sequence<type_id={}>", s.type_param.id);
+                            }
+                            scale_info::TypeDef::Array(a) => {
+                                println!("      kind: Array<type_id={}, len={}>", a.type_param.id, a.len);
+                            }
+                            scale_info::TypeDef::Tuple(t) => {
+                                println!("      kind: Tuple with {} fields", t.fields.len());
+                            }
+                            scale_info::TypeDef::Primitive(p) => {
+                                println!("      kind: Primitive({:?})", p);
+                            }
+                            scale_info::TypeDef::Compact(c) => {
+                                println!("      kind: Compact<type_id={}>", c.type_param.id);
+                            }
+                            scale_info::TypeDef::BitSequence(_) => {
+                                println!("      kind: BitSequence");
+                            }
+                        }
+                    }
+                }
+            }
+            println!();
+        }
+    } else {
+        anyhow::bail!("Call type is not a variant");
     }
 
     Ok(())

@@ -148,6 +148,11 @@ pub fn build_proposal_call(
 }
 
 /// Build a Council or TA propose call that wraps an inner proposal
+///
+/// From metadata (query metadata --pallet Council --call propose):
+/// - threshold: Compact<u32>
+/// - proposal: RuntimeCall (pre-encoded call bytes)
+/// - length_bound: Compact<u32>
 pub async fn build_propose_call(
     api: &OnlineClient<SubstrateConfig>,
     is_council: bool,
@@ -156,21 +161,30 @@ pub async fn build_propose_call(
 ) -> Result<Vec<u8>> {
     use parity_scale_codec::{Compact, Encode};
 
-    // Get pallet index from metadata
-    let metadata = api.metadata();
-    let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
-    let pallet = metadata.pallet_by_name(pallet_name)
-        .ok_or_else(|| anyhow::anyhow!("Pallet {} not found", pallet_name))?;
-    let pallet_index = pallet.index();
+    // Step 1: Encode the inner proposal (this becomes the RuntimeCall bytes)
+    let proposal_call_bytes = api.tx().call_data(proposal_call)?;
+    let proposal_length = proposal_call_bytes.len() as u32;
 
-    // Get propose call index from metadata
-    let call_ty = pallet.call_ty_id()
+    // Step 2: Get pallet and call indices from metadata
+    let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
+    let metadata = api.metadata();
+    let pallet = metadata
+        .pallet_by_name(pallet_name)
+        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", pallet_name))?;
+
+    let pallet_index = pallet.index();
+    let call_ty_id = pallet
+        .call_ty_id()
         .ok_or_else(|| anyhow::anyhow!("Pallet {} has no calls", pallet_name))?;
-    let call_type = metadata.types().resolve(call_ty)
+
+    let call_type = metadata
+        .types()
+        .resolve(call_ty_id)
         .ok_or_else(|| anyhow::anyhow!("Call type not found"))?;
 
     let propose_call_index = if let scale_info::TypeDef::Variant(v) = &call_type.type_def {
-        v.variants.iter()
+        v.variants
+            .iter()
             .find(|var| var.name == "propose")
             .ok_or_else(|| anyhow::anyhow!("propose call not found"))?
             .index
@@ -178,17 +192,13 @@ pub async fn build_propose_call(
         anyhow::bail!("Call type is not a variant");
     };
 
-    // Encode the inner proposal call
-    let proposal_call_bytes = api.tx().call_data(proposal_call)?;
-    let proposal_length = proposal_call_bytes.len() as u32;
-
-    // Manually construct the propose call bytes
-    // propose(threshold: Compact<u32>, proposal: Box<Call>, length_bound: Compact<u32>)
+    // Step 3: Manually encode the propose call
+    // Format: pallet_index | call_index | Compact(threshold) | proposal_bytes | Compact(length)
     let mut call_bytes = Vec::new();
     call_bytes.push(pallet_index);
     call_bytes.push(propose_call_index);
     call_bytes.extend_from_slice(&Compact(threshold).encode());
-    call_bytes.extend_from_slice(&proposal_call_bytes); // Box<Call> has no length prefix
+    call_bytes.extend_from_slice(&proposal_call_bytes); // RuntimeCall is already encoded
     call_bytes.extend_from_slice(&Compact(proposal_length).encode());
 
     Ok(call_bytes)
