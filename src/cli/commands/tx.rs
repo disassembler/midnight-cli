@@ -116,6 +116,8 @@ pub enum ProposalType {
     System(SystemProposal),
     /// Runtime upgrade proposals
     Runtime(RuntimeProposal),
+    /// Federated authority proposals (require both Council and TA approval)
+    Federated(FederatedProposal),
 }
 
 #[derive(Args)]
@@ -257,6 +259,73 @@ pub enum RuntimeAction {
     SetCode {
         /// WASM runtime code (hex-encoded)
         wasm_hex: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
+}
+
+#[derive(Args)]
+pub struct FederatedProposal {
+    #[command(subcommand)]
+    pub body: FederatedBody,
+}
+
+#[derive(Subcommand)]
+pub enum FederatedBody {
+    /// Council proposes federated authority action (first step)
+    Council(FederatedArgs),
+    /// Technical Authority proposes federated authority action (second step)
+    Ta(FederatedArgs),
+}
+
+#[derive(Args)]
+pub struct FederatedArgs {
+    #[command(subcommand)]
+    pub action: FederatedAction,
+}
+
+#[derive(Subcommand)]
+pub enum FederatedAction {
+    /// Pause a transaction type
+    PauseTransaction {
+        /// Pallet name (e.g., "Midnight")
+        pallet: String,
+        /// Call name (e.g., "transfer")
+        call: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
+    /// Unpause a transaction type
+    UnpauseTransaction {
+        /// Pallet name
+        pallet: String,
+        /// Call name
+        call: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
+    /// Update terms and conditions
+    UpdateTermsAndConditions {
+        /// Hash of the new T&C document
+        hash: String,
+        /// URL of the new T&C document
+        url: String,
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
+    /// Update D-parameter for authority selection
+    UpdateDParameter {
+        /// Number of permissioned candidates
+        num_permissioned: u16,
+        /// Number of registered candidates
+        num_registered: u16,
+        #[command(flatten)]
+        common: CommonTxArgs,
+    },
+    /// Post a remark via federated authority (for testing)
+    Remark {
+        /// Message text
+        message: String,
         #[command(flatten)]
         common: CommonTxArgs,
     },
@@ -444,6 +513,22 @@ fn extract_propose_common(proposal: &ProposalType) -> &CommonTxArgs {
                 RuntimeAction::SetCode { common, .. } => common,
             },
         },
+        ProposalType::Federated(f) => match &f.body {
+            FederatedBody::Council(args) => match &args.action {
+                FederatedAction::PauseTransaction { common, .. } => common,
+                FederatedAction::UnpauseTransaction { common, .. } => common,
+                FederatedAction::UpdateTermsAndConditions { common, .. } => common,
+                FederatedAction::UpdateDParameter { common, .. } => common,
+                FederatedAction::Remark { common, .. } => common,
+            },
+            FederatedBody::Ta(args) => match &args.action {
+                FederatedAction::PauseTransaction { common, .. } => common,
+                FederatedAction::UnpauseTransaction { common, .. } => common,
+                FederatedAction::UpdateTermsAndConditions { common, .. } => common,
+                FederatedAction::UpdateDParameter { common, .. } => common,
+                FederatedAction::Remark { common, .. } => common,
+            },
+        },
     }
 }
 
@@ -526,6 +611,10 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
             RuntimeBody::Council(_) => true,
             RuntimeBody::Ta(_) => false,
         },
+        ProposalType::Federated(f) => match &f.body {
+            FederatedBody::Council(_) => true,
+            FederatedBody::Ta(_) => false,
+        },
     };
 
     let (available_members, body_name) = if is_council {
@@ -569,9 +658,36 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!("✓ Using signer: {}", signer_address);
     eprintln!();
 
-    // Build the proposal call using subxt
-    let (proposal_payload, proposal_description) = super::tx_builder::build_proposal_call(&args.proposal)?;
-    let proposal_bytes = api.tx().call_data(&proposal_payload)?;
+    // Build the inner proposal call using subxt
+    let (inner_payload, mut proposal_description) = super::tx_builder::build_proposal_call(&args.proposal, &api).await?;
+
+    // For federated proposals, wrap in FederatedAuthority.motion_approve
+    let (proposal_payload, proposal_bytes) = if let Some(fed_marker) = proposal_description.strip_prefix("[FEDERATED:") {
+        // Extract pallet and call indices from marker
+        let end = fed_marker.find(']').ok_or_else(|| anyhow::anyhow!("Invalid federated marker"))?;
+        let indices = &fed_marker[..end];
+        let mut parts = indices.split(':');
+        let fa_pallet_idx: u8 = parts.next().unwrap().parse()?;
+        let fa_call_idx: u8 = parts.next().unwrap().parse()?;
+        proposal_description = fed_marker[end+2..].to_string(); // Skip "] "
+
+        // Encode inner call
+        let inner_call_bytes = api.tx().call_data(&inner_payload)?;
+
+        // Build FederatedAuthority.motion_approve(inner_call) manually
+        let mut motion_approve_bytes = Vec::new();
+        motion_approve_bytes.push(fa_pallet_idx);
+        motion_approve_bytes.push(fa_call_idx);
+        motion_approve_bytes.extend_from_slice(&inner_call_bytes);
+
+        // Create a placeholder payload for build_propose_call to use
+        // We'll pass the bytes directly instead
+        (inner_payload.clone(), motion_approve_bytes)
+    } else {
+        // Normal proposal - encode it
+        let bytes = api.tx().call_data(&inner_payload)?;
+        (inner_payload, bytes)
+    };
 
     let proposal_hash = blake2_256(&proposal_bytes);
     let proposal_hash_hex = format!("0x{}", hex::encode(proposal_hash));
@@ -602,6 +718,10 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
             RuntimeBody::Council(_) => "council-propose-runtime",
             RuntimeBody::Ta(_) => "ta-propose-runtime",
         },
+        ProposalType::Federated(f) => match &f.body {
+            FederatedBody::Council(_) => "council-propose-federated",
+            FederatedBody::Ta(_) => "ta-propose-federated",
+        },
     };
 
     // Calculate threshold: 2/3 majority (matches runtime config)
@@ -624,12 +744,22 @@ async fn handle_propose(args: ProposeArgs) -> Result<()> {
     eprintln!();
 
     // Build the propose call using subxt
-    let call_bytes = super::tx_builder::build_propose_call(
-        &api,
-        is_council,
-        threshold,
-        &proposal_payload,
-    ).await?;
+    // For federated proposals, use pre-encoded bytes; for others, encode from payload
+    let call_bytes = if proposal_description.starts_with("Federated ") {
+        super::tx_builder::build_propose_call_from_bytes(
+            &api,
+            is_council,
+            threshold,
+            &proposal_bytes,
+        ).await?
+    } else {
+        super::tx_builder::build_propose_call(
+            &api,
+            is_council,
+            threshold,
+            &proposal_payload,
+        ).await?
+    };
 
     // Get nonce and build signing payload
     let nonce: u64 = client

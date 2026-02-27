@@ -1,11 +1,12 @@
 use anyhow::Result;
 use subxt::dynamic::Value;
 use subxt::{OnlineClient, SubstrateConfig};
-use super::tx::{MembershipAction, MembershipBody, ProposalType, RuntimeAction, RuntimeBody, SystemAction, SystemBody};
+use super::tx::{FederatedAction, FederatedBody, MembershipAction, MembershipBody, ProposalType, RuntimeAction, RuntimeBody, SystemAction, SystemBody};
 
 /// Build a dynamic transaction call and return its encoded bytes and description
-pub fn build_proposal_call(
+pub async fn build_proposal_call(
     proposal_type: &ProposalType,
+    api: &OnlineClient<SubstrateConfig>,
 ) -> Result<(subxt::tx::DynamicPayload, String)> {
 
     match proposal_type {
@@ -144,7 +145,172 @@ pub fn build_proposal_call(
                 }
             }
         }
+        ProposalType::Federated(f) => {
+            let action = match &f.body {
+                FederatedBody::Council(args) | FederatedBody::Ta(args) => &args.action,
+            };
+
+            // Build the inner call first
+            let (inner_call, description) = match action {
+                FederatedAction::PauseTransaction { pallet, call, .. } => {
+                    // TxPause.pause takes a tuple (pallet_name_bytes, call_name_bytes)
+                    let pallet_bytes = pallet.as_bytes();
+                    let call_bytes = call.as_bytes();
+                    (
+                        subxt::dynamic::tx(
+                            "TxPause",
+                            "pause",
+                            vec![Value::unnamed_composite(vec![
+                                Value::from_bytes(pallet_bytes),
+                                Value::from_bytes(call_bytes),
+                            ])],
+                        ),
+                        format!("Pause transaction: {}::{}", pallet, call),
+                    )
+                }
+                FederatedAction::UnpauseTransaction { pallet, call, .. } => {
+                    let pallet_bytes = pallet.as_bytes();
+                    let call_bytes = call.as_bytes();
+                    (
+                        subxt::dynamic::tx(
+                            "TxPause",
+                            "unpause",
+                            vec![Value::unnamed_composite(vec![
+                                Value::from_bytes(pallet_bytes),
+                                Value::from_bytes(call_bytes),
+                            ])],
+                        ),
+                        format!("Unpause transaction: {}::{}", pallet, call),
+                    )
+                }
+                FederatedAction::UpdateTermsAndConditions { hash, url, .. } => {
+                    let hash_bytes = hex::decode(hash.trim_start_matches("0x"))?;
+                    if hash_bytes.len() != 32 {
+                        anyhow::bail!("T&C hash must be 32 bytes");
+                    }
+                    let url_bytes = url.as_bytes();
+                    (
+                        subxt::dynamic::tx(
+                            "SystemParameters",
+                            "update_terms_and_conditions",
+                            vec![Value::from_bytes(&hash_bytes), Value::from_bytes(url_bytes)],
+                        ),
+                        format!("Update T&C: {} ({})", hash, url),
+                    )
+                }
+                FederatedAction::UpdateDParameter { num_permissioned, num_registered, .. } => {
+                    (
+                        subxt::dynamic::tx(
+                            "SystemParameters",
+                            "update_d_parameter",
+                            vec![Value::u128(*num_permissioned as u128), Value::u128(*num_registered as u128)],
+                        ),
+                        format!("Update D-parameter: permissioned={}, registered={}", num_permissioned, num_registered),
+                    )
+                }
+                FederatedAction::Remark { message, .. } => {
+                    let message_bytes = message.as_bytes();
+                    (
+                        subxt::dynamic::tx(
+                            "System",
+                            "remark_with_event",
+                            vec![Value::from_bytes(message_bytes)],
+                        ),
+                        format!("Federated Remark: {}", message),
+                    )
+                }
+            };
+
+            // For federated proposals, we need to manually build the full call stack:
+            // Council.propose(FederatedAuthority.motion_approve(inner_call))
+            //
+            // The problem is that motion_approve expects RuntimeCall as a variant,
+            // but subxt's dynamic API can't nest calls properly.
+            //
+            // Solution: Manually encode everything
+            use parity_scale_codec::Encode;
+
+            // Step 1: Encode the inner call
+            let inner_call_bytes = api.tx().call_data(&inner_call)?;
+
+            // Step 2: Get FederatedAuthority pallet and motion_approve call indices
+            let metadata = api.metadata();
+            let fa_pallet = metadata
+                .pallet_by_name("FederatedAuthority")
+                .ok_or_else(|| anyhow::anyhow!("FederatedAuthority pallet not found"))?;
+            let fa_pallet_index = fa_pallet.index();
+
+            let motion_approve_call = fa_pallet
+                .call_variant_by_name("motion_approve")
+                .ok_or_else(|| anyhow::anyhow!("motion_approve call not found"))?;
+            let motion_approve_index = motion_approve_call.index;
+
+            // Step 3: Manually encode FederatedAuthority.motion_approve(inner_call)
+            let mut motion_approve_bytes = Vec::new();
+            motion_approve_bytes.push(fa_pallet_index);
+            motion_approve_bytes.push(motion_approve_index);
+            motion_approve_bytes.extend_from_slice(&inner_call_bytes);
+
+            // Step 4: Return as a "fake" dynamic payload that we'll handle specially
+            // We'll just return the encoded bytes as a Value and handle it in handle_propose
+            // Actually, we can't do this cleanly. Let me try a different approach.
+            //
+            // Better: Return a marker in description, and handle it specially in handle_propose
+            Ok((inner_call, format!("[FEDERATED:{}:{}] {}", fa_pallet_index, motion_approve_index, description)))
+        }
     }
+}
+
+/// Build a Council or TA propose call from pre-encoded bytes
+///
+/// Use this for federated proposals where the call is already manually encoded
+pub async fn build_propose_call_from_bytes(
+    api: &OnlineClient<SubstrateConfig>,
+    is_council: bool,
+    threshold: u32,
+    proposal_call_bytes: &[u8],
+) -> Result<Vec<u8>> {
+    use parity_scale_codec::{Compact, Encode};
+
+    let proposal_length = proposal_call_bytes.len() as u32;
+
+    // Get pallet and call indices from metadata
+    let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
+    let metadata = api.metadata();
+    let pallet = metadata
+        .pallet_by_name(pallet_name)
+        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", pallet_name))?;
+
+    let pallet_index = pallet.index();
+    let call_ty_id = pallet
+        .call_ty_id()
+        .ok_or_else(|| anyhow::anyhow!("Pallet {} has no calls", pallet_name))?;
+
+    let call_type = metadata
+        .types()
+        .resolve(call_ty_id)
+        .ok_or_else(|| anyhow::anyhow!("Call type not found"))?;
+
+    let propose_call_index = if let scale_info::TypeDef::Variant(v) = &call_type.type_def {
+        v.variants
+            .iter()
+            .find(|var| var.name == "propose")
+            .ok_or_else(|| anyhow::anyhow!("propose call not found"))?
+            .index
+    } else {
+        anyhow::bail!("Call type is not a variant");
+    };
+
+    // Manually encode the propose call
+    // Format: pallet_index | call_index | Compact(threshold) | proposal_bytes | Compact(length)
+    let mut call_bytes = Vec::new();
+    call_bytes.push(pallet_index);
+    call_bytes.push(propose_call_index);
+    call_bytes.extend_from_slice(&Compact(threshold).encode());
+    call_bytes.extend_from_slice(proposal_call_bytes); // Pre-encoded RuntimeCall bytes
+    call_bytes.extend_from_slice(&Compact(proposal_length).encode());
+
+    Ok(call_bytes)
 }
 
 /// Build a Council or TA propose call that wraps an inner proposal
