@@ -212,6 +212,8 @@ pub async fn build_vote_call(
     proposal_index: u32,
     approve: bool,
 ) -> Result<Vec<u8>> {
+    use parity_scale_codec::{Compact, Encode};
+
     let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
 
     let hash_bytes = hex::decode(proposal_hash.trim_start_matches("0x"))?;
@@ -219,19 +221,27 @@ pub async fn build_vote_call(
         anyhow::bail!("Proposal hash must be 32 bytes");
     }
 
-    // Build the vote call: vote(proposal_hash, index, approve)
-    let vote_tx = subxt::dynamic::tx(
-        pallet_name,
-        "vote",
-        vec![
-            Value::from_bytes(&hash_bytes),
-            Value::u128(proposal_index as u128),
-            Value::bool(approve),
-        ],
-    );
+    // Get pallet and call indices from metadata
+    let metadata = api.metadata();
+    let pallet = metadata
+        .pallet_by_name(pallet_name)
+        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", pallet_name))?;
+    let pallet_index = pallet.index();
 
-    let vote_bytes = api.tx().call_data(&vote_tx)?;
-    Ok(vote_bytes)
+    let vote_call = pallet
+        .call_variant_by_name("vote")
+        .ok_or_else(|| anyhow::anyhow!("Call 'vote' not found in {}", pallet_name))?;
+    let call_index = vote_call.index;
+
+    // Manually encode: pallet_index | call_index | hash | Compact(index) | bool(approve)
+    let mut call_bytes = Vec::new();
+    call_bytes.push(pallet_index);
+    call_bytes.push(call_index);
+    call_bytes.extend_from_slice(&hash_bytes);
+    call_bytes.extend_from_slice(&Compact(proposal_index).encode());
+    call_bytes.push(if approve { 1 } else { 0 });
+
+    Ok(call_bytes)
 }
 
 /// Build a Council or TA close call
@@ -242,6 +252,8 @@ pub async fn build_close_call(
     proposal_index: u32,
     proposal_length: u32,
 ) -> Result<Vec<u8>> {
+    use parity_scale_codec::{Compact, Encode};
+
     let pallet_name = if is_council { "Council" } else { "TechnicalCommittee" };
 
     let hash_bytes = hex::decode(proposal_hash.trim_start_matches("0x"))?;
@@ -249,23 +261,31 @@ pub async fn build_close_call(
         anyhow::bail!("Proposal hash must be 32 bytes");
     }
 
-    // Build the close call with Weight parameter (refTime, proofSize)
-    let close_tx = subxt::dynamic::tx(
-        pallet_name,
-        "close",
-        vec![
-            Value::from_bytes(&hash_bytes),
-            Value::u128(proposal_index as u128),
-            Value::unnamed_composite(vec![
-                Value::u128(1000000000), // refTime
-                Value::u128(1000000),    // proofSize
-            ]),
-            Value::u128(proposal_length as u128),
-        ],
-    );
+    // Get pallet and call indices from metadata
+    let metadata = api.metadata();
+    let pallet = metadata
+        .pallet_by_name(pallet_name)
+        .ok_or_else(|| anyhow::anyhow!("Pallet '{}' not found", pallet_name))?;
+    let pallet_index = pallet.index();
 
-    let close_bytes = api.tx().call_data(&close_tx)?;
-    Ok(close_bytes)
+    let close_call = pallet
+        .call_variant_by_name("close")
+        .ok_or_else(|| anyhow::anyhow!("Call 'close' not found in {}", pallet_name))?;
+    let call_index = close_call.index;
+
+    // Manually encode: pallet_index | call_index | hash | Compact(index) | Weight | Compact(length)
+    // Weight is encoded as: Compact(ref_time) | Compact(proof_size)
+    let mut call_bytes = Vec::new();
+    call_bytes.push(pallet_index);
+    call_bytes.push(call_index);
+    call_bytes.extend_from_slice(&hash_bytes);
+    call_bytes.extend_from_slice(&Compact(proposal_index).encode());
+    // Weight bound (generous values)
+    call_bytes.extend_from_slice(&Compact(1000000000u64).encode()); // ref_time
+    call_bytes.extend_from_slice(&Compact(1000000u64).encode());    // proof_size
+    call_bytes.extend_from_slice(&Compact(proposal_length).encode());
+
+    Ok(call_bytes)
 }
 
 /// Parse an SS58 address to raw account bytes
