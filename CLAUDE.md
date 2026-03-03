@@ -48,6 +48,11 @@ nix develop
 
 # Check without building
 cargo check
+
+# Generate shell completions
+cargo run -- completions bash > midnight-cli.bash
+cargo run -- completions zsh > _midnight-cli
+cargo run -- completions fish > midnight-cli.fish
 ```
 
 ### Git Commit Guidelines
@@ -360,10 +365,12 @@ The intended air-gap workflow for governance transactions:
 ### Nix Integration
 
 The project uses Nix flakes for reproducible builds:
-- `flake.nix`: Flake configuration with naersk for Rust builds
-- `perSystem/packages.nix`: Package definition using naersk
+- `flake.nix`: Flake configuration with crane for Rust builds
+- `perSystem/packages.nix`: Package definition using crane
 - `perSystem/devShells.nix`: Development shell with Rust toolchain and dependencies
 - `.envrc`: direnv integration for automatic shell activation
+
+Shell completions for bash, zsh, and fish are automatically generated and installed during the Nix build process. When installing via `nix profile install` or using the Nix package, completions will be available in the appropriate system directories.
 
 ## Important Implementation Details
 

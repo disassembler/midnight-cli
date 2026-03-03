@@ -1,5 +1,7 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, CommandFactory};
+use clap_complete::{generate, Shell};
 use anyhow::Result;
+use std::io;
 
 mod application;
 mod cli;
@@ -60,6 +62,13 @@ enum Commands {
 
     /// Debug utilities for transaction analysis
     Debug(DebugArgs),
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
@@ -76,5 +85,10 @@ async fn main() -> Result<()> {
         Commands::Tx(tx_cmd) => handle_tx_command(tx_cmd).await,
         Commands::Query(query_cmd) => handle_query_command(query_cmd).await,
         Commands::Debug(debug_cmd) => handle_debug_command(debug_cmd),
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "midnight-cli", &mut io::stdout());
+            Ok(())
+        }
     }
 }

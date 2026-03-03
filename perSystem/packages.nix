@@ -41,6 +41,7 @@
         pkg-config
         protobuf
         cmake
+        installShellFiles
       ];
 
       meta = {
@@ -60,6 +61,19 @@
         // {
           inherit cargoArtifacts;
           doCheck = true;
+
+          # Generate and install shell completions
+          postInstall = ''
+            # Generate completions for each shell
+            for shell in bash zsh fish; do
+              $out/bin/midnight-cli completions $shell > midnight-cli.$shell
+            done
+
+            # Install completions
+            installShellCompletion --bash midnight-cli.bash
+            installShellCompletion --zsh midnight-cli.zsh
+            installShellCompletion --fish midnight-cli.fish
+          '';
         });
     };
   };
