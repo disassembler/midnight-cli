@@ -1104,14 +1104,21 @@ fn handle_export_network(args: ExportNetworkArgs) -> Result<()> {
 /// Deployment information output
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeploymentInfo {
-    pub council_address: String,
-    pub council_policy_id: String,
-    pub council_nft_policy: String,
-    pub council_tx_hash: String,
-    pub ta_address: String,
-    pub ta_policy_id: String,
-    pub ta_nft_policy: String,
-    pub ta_tx_hash: String,
+    pub network: String,
+    pub council_contract: DeployedContract,
+    pub ta_contract: DeployedContract,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeployedContract {
+    pub script_hash: String,
+    pub address: String,
+    pub nft_policy_id: String,
+    pub nft_asset_name: String,
+    pub datum_cbor: String,
+    pub tx_hash: String,
+    pub members: usize,
+    pub threshold: u32,
 }
 
 async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
@@ -1209,86 +1216,272 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  Payment address:   {}", payment_addr);
     eprintln!();
 
-    // 7. Show deployment readiness
-    eprintln!("✅ All prerequisites validated and prepared!");
+    // 7. Query wallet UTxOs
+    eprintln!("🔍 Querying wallet UTxOs...");
+    eprintln!("  Connecting to:  {}", args.utxorpc);
+
+    let payment_addr_bytes = wallet.payment_address_bytes(0)
+        .map_err(|e| anyhow::anyhow!("Failed to get payment address bytes: {}", e))?;
+
+    // Create async runtime for UTxORPC calls
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    let mut utxorpc_client = runtime.block_on(async {
+        hayate::wallet::utxorpc_client::WalletUtxorpcClient::connect(args.utxorpc.clone()).await
+    })?;
+
+    let wallet_utxos = runtime.block_on(async {
+        utxorpc_client.query_utxos(vec![payment_addr_bytes.clone()]).await
+    })?;
+
+    if wallet_utxos.is_empty() {
+        anyhow::bail!(
+            "No UTxOs found at wallet address: {}\n\
+            Please fund this address with ADA before deploying contracts.",
+            payment_addr
+        );
+    }
+
+    let total_ada: u64 = wallet_utxos.iter().map(|u| u.lovelace()).sum();
+    eprintln!("  Found {} UTxOs", wallet_utxos.len());
+    eprintln!("  Total balance: {} ADA ({} lovelace)", total_ada / 1_000_000, total_ada);
     eprintln!();
 
-    // 7. Return detailed summary
-    anyhow::bail!(
-        "Contract deployment ready - implementation in progress\n\n\
-        Prepared:\n\
-        ✓ Contract scripts loaded ({} + {} bytes)\n\
-        ✓ Governance members parsed ({} council, {} TA)\n\
-        ✓ Script addresses calculated\n\
-        ✓ Datums constructed and encoded ({} + {} bytes)\n\
-        ✓ NFT minting policies generated\n\
-        \n\
-        Council Contract:\n\
-        • Script address:  {}\n\
-        • Script hash:     {}\n\
-        • NFT policy:      {}\n\
-        • Members:         {}\n\
-        • Threshold:       {}\n\
-        \n\
-        TA Contract:\n\
-        • Script address:  {}\n\
-        • Script hash:     {}\n\
-        • NFT policy:      {}\n\
-        • Members:         {}\n\
-        • Threshold:       {}\n\
-        \n\
-        Wallet:\n\
-        • Name:            {}\n\
-        • Account:         {}\n\
-        • Payment address: {}\n\
-        \n\
-        Remaining steps:\n\
-        1. Query wallet UTxOs via UTxORPC ({})\n\
-        2. Select funding ({} ADA) and collateral UTxOs\n\
-        3. Build 2 deployment transactions:\n\
-           • Mint Council NFT + lock with datum at contract address\n\
-           • Mint TA NFT + lock with datum at contract address\n\
-        4. Sign transactions (wallet key + temporary mint keys)\n\
-        5. Submit via UTxORPC and wait for confirmation\n\
-        6. Save deployment info to {}\n\
-        \n\
-        All cryptographic components are ready. Hayate's wallet module provides:\n\
-        • BIP39 mnemonic → root key derivation (ICARUS)\n\
-        • CIP-1852 HD wallet derivation (m/1852'/1815'/account'/0/index)\n\
-        • Shelley address generation with stake key\n\
-        • Transaction signing with Ed25519\n\
-        • UTxORPC client for queries and submission\n\
-        \n\
-        The PlutusTransactionBuilder in hayate supports:\n\
-        • NFT minting with native scripts\n\
-        • Multi-asset outputs (ADA + NFT)\n\
-        • Inline datums for contract deployment\n\
-        • Conway-era transaction building\n\
-        \n\
-        Next: Implement transaction building and submission logic.",
-        council_script_bytes.len(),
-        ta_script_bytes.len(),
-        council_members.len(),
-        ta_members.len(),
-        council_datum.len(),
-        ta_datum.len(),
-        hex::encode(&council_addr),
-        hex::encode(hayate::wallet::plutus::script_hash(&council_script_bytes)),
-        hex::encode(council_policy_id),
-        council_members.len(),
-        args.council_threshold,
-        hex::encode(&ta_addr),
-        hex::encode(hayate::wallet::plutus::script_hash(&ta_script_bytes)),
-        hex::encode(ta_policy_id),
-        ta_members.len(),
-        args.ta_threshold,
-        args.wallet,
-        args.account,
-        payment_addr,
-        args.utxorpc,
-        args.contract_amount / 1_000_000,
-        args.output.display()
+    // 8. Check sufficient funds
+    let required_ada = (args.contract_amount * 2) + (args.fee * 2) + 10_000_000; // 2 contracts + fees + buffer
+    if total_ada < required_ada {
+        anyhow::bail!(
+            "Insufficient funds. Required: {} ADA, Available: {} ADA",
+            required_ada / 1_000_000,
+            total_ada / 1_000_000
+        );
+    }
+
+    // 9. Build and submit transactions
+    eprintln!("🏗️  Building deployment transactions...");
+    eprintln!();
+
+    // Build Council contract deployment
+    eprintln!("📝 Council Contract Deployment:");
+    let council_tx_hash = build_and_submit_deployment_tx(
+        &runtime,
+        &mut utxorpc_client,
+        &wallet,
+        &wallet_utxos,
+        &council_addr,
+        &council_datum,
+        &council_mint_policy,
+        &council_mint_key,
+        council_policy_id,
+        b"CouncilNFT".to_vec(),
+        args.contract_amount,
+        args.fee,
+        hayate_network,
+        &payment_addr_bytes,
+    )?;
+
+    eprintln!("  ✅ Council deployment submitted: {}", hex::encode(&council_tx_hash));
+    eprintln!();
+
+    // Refresh UTxOs after first transaction
+    let wallet_utxos = runtime.block_on(async {
+        utxorpc_client.query_utxos(vec![payment_addr_bytes.clone()]).await
+    })?;
+
+    // Build TA contract deployment
+    eprintln!("📝 TA Contract Deployment:");
+    let ta_tx_hash = build_and_submit_deployment_tx(
+        &runtime,
+        &mut utxorpc_client,
+        &wallet,
+        &wallet_utxos,
+        &ta_addr,
+        &ta_datum,
+        &ta_mint_policy,
+        &ta_mint_key,
+        ta_policy_id,
+        b"TAgovNFT".to_vec(),
+        args.contract_amount,
+        args.fee,
+        hayate_network,
+        &payment_addr_bytes,
+    )?;
+
+    eprintln!("  ✅ TA deployment submitted: {}", hex::encode(&ta_tx_hash));
+    eprintln!();
+
+    // 10. Save deployment info
+    eprintln!("💾 Saving deployment info to {}...", args.output.display());
+
+    let deployment_info = DeploymentInfo {
+        network: args.network.clone(),
+        council_contract: DeployedContract {
+            script_hash: hex::encode(hayate::wallet::plutus::script_hash(&council_script_bytes)),
+            address: hex::encode(&council_addr),
+            nft_policy_id: hex::encode(council_policy_id),
+            nft_asset_name: hex::encode(b"CouncilNFT"),
+            datum_cbor: hex::encode(&council_datum),
+            tx_hash: hex::encode(&council_tx_hash),
+            members: council_members.len(),
+            threshold: args.council_threshold,
+        },
+        ta_contract: DeployedContract {
+            script_hash: hex::encode(hayate::wallet::plutus::script_hash(&ta_script_bytes)),
+            address: hex::encode(&ta_addr),
+            nft_policy_id: hex::encode(ta_policy_id),
+            nft_asset_name: hex::encode(b"TAgovNFT"),
+            datum_cbor: hex::encode(&ta_datum),
+            tx_hash: hex::encode(&ta_tx_hash),
+            members: ta_members.len(),
+            threshold: args.ta_threshold,
+        },
+    };
+
+    let json = serde_json::to_string_pretty(&deployment_info)?;
+    std::fs::write(&args.output, json)?;
+
+    eprintln!();
+    eprintln!("✅ Deployment complete!");
+    eprintln!();
+    eprintln!("Summary:");
+    eprintln!("  Council contract: {}", hex::encode(&council_addr));
+    eprintln!("  TA contract:      {}", hex::encode(&ta_addr));
+    eprintln!("  Deployment info:  {}", args.output.display());
+    eprintln!();
+    eprintln!("Next steps:");
+    eprintln!("  1. Wait for transactions to confirm on chain");
+    eprintln!("  2. Use the deployment info file to interact with contracts");
+    eprintln!("  3. Update governance keys with rotate-council-keys / rotate-ta-keys");
+
+    Ok(())
+}
+
+/// Build and submit a contract deployment transaction
+#[allow(clippy::too_many_arguments)]
+fn build_and_submit_deployment_tx(
+    runtime: &tokio::runtime::Runtime,
+    utxorpc_client: &mut hayate::wallet::utxorpc_client::WalletUtxorpcClient,
+    wallet: &hayate::wallet::Wallet,
+    wallet_utxos: &[hayate::wallet::utxorpc_client::UtxoData],
+    contract_addr: &[u8],
+    datum_bytes: &[u8],
+    mint_policy: &hayate::wallet::plutus::TempKeyMintPolicy,
+    mint_secret_key: &[u8],
+    policy_id: [u8; 28],
+    asset_name: Vec<u8>,
+    contract_amount: u64,
+    fee: u64,
+    network: hayate::wallet::Network,
+    change_addr: &[u8],
+) -> Result<Vec<u8>> {
+    use hayate::wallet::tx_builder::PlutusTransactionBuilder;
+    use hayate::wallet::plutus::DatumOption;
+
+    // Select UTxOs for funding (simple greedy selection)
+    let required = contract_amount + fee + 2_000_000; // amount + fee + buffer
+    let mut selected_utxos = Vec::new();
+    let mut selected_amount = 0u64;
+
+    for utxo in wallet_utxos {
+        if utxo.assets.is_empty() { // Only use pure ADA UTxOs
+            selected_utxos.push(utxo.clone());
+            selected_amount += utxo.lovelace();
+            if selected_amount >= required {
+                break;
+            }
+        }
+    }
+
+    if selected_amount < required {
+        anyhow::bail!(
+            "Insufficient funds for transaction. Required: {} lovelace, Available: {} lovelace",
+            required,
+            selected_amount
+        );
+    }
+
+    eprintln!("  Selected {} UTxO(s) ({} lovelace)", selected_utxos.len(), selected_amount);
+
+    // Build transaction
+    let mut builder = PlutusTransactionBuilder::new(
+        match network {
+            hayate::wallet::Network::Mainnet => hayate::wallet::plutus::Network::Mainnet,
+            hayate::wallet::Network::Testnet => hayate::wallet::plutus::Network::Testnet,
+        },
+        change_addr.to_vec(),
     );
+
+    // Add wallet UTxO inputs
+    use hayate::wallet::tx_builder::PlutusInput;
+    for utxo in &selected_utxos {
+        builder.add_input(&PlutusInput::regular(utxo.clone()))?;
+    }
+
+    // Mint NFT
+    builder.mint_asset(policy_id, asset_name.clone(), 1)?;
+    let native_script = mint_policy.to_native_script()
+        .map_err(|e| anyhow::anyhow!("Failed to build native script: {}", e))?;
+    builder.add_native_script(native_script)?;
+
+    // Add contract output with NFT and inline datum
+    use hayate::wallet::tx_builder::PlutusOutput;
+    use hayate::wallet::utxorpc_client::AssetData;
+    let mut contract_output = PlutusOutput::new(
+        contract_addr.to_vec(),
+        contract_amount,
+    );
+    contract_output.datum = Some(DatumOption::Inline(datum_bytes.to_vec()));
+    contract_output.assets.push(AssetData {
+        policy_id: policy_id.to_vec(),
+        asset_name: asset_name.clone(),
+        amount: 1,
+    });
+    builder.add_output(&contract_output)?;
+
+    // Add change output
+    let change_amount = selected_amount - contract_amount - fee;
+    if change_amount > 1_000_000 { // Only add change if > 1 ADA
+        let change_output = PlutusOutput::new(change_addr.to_vec(), change_amount);
+        builder.add_output(&change_output)?;
+    }
+
+    // Set transaction parameters
+    builder.set_fee(fee);
+    builder.set_network_id();
+
+    // Get signing keys
+    // 1. Wallet payment key for spending inputs
+    let wallet_signing_key = wallet.payment_signing_key(0)
+        .map_err(|e| anyhow::anyhow!("Failed to get wallet signing key: {}", e))?;
+
+    // 2. Temporary mint key for native script
+    let mint_signing_key = hayate::wallet::ed25519_secret_to_privatekey(mint_secret_key)
+        .map_err(|e| anyhow::anyhow!("Failed to convert mint key: {}", e))?;
+
+    let signing_keys = vec![wallet_signing_key, mint_signing_key];
+
+    eprintln!("  Signing transaction...");
+
+    // Build and sign the transaction
+    let signed_tx_bytes = builder.build_and_sign(signing_keys)
+        .map_err(|e| anyhow::anyhow!("Failed to build and sign transaction: {}", e))?;
+
+    eprintln!("  Signed transaction: {} bytes", signed_tx_bytes.len());
+
+    // Calculate transaction hash before submitting (for reference)
+    use pallas_crypto::hash::Hasher;
+    let tx_hash = Hasher::<256>::hash(&signed_tx_bytes);
+    let tx_hash_bytes = tx_hash.as_ref().to_vec();
+
+    // Submit transaction
+    eprintln!("  Submitting to network...");
+    runtime.block_on(async {
+        utxorpc_client.submit_transaction(signed_tx_bytes).await
+    })?;
+
+    eprintln!("  Transaction submitted: {}", hex::encode(&tx_hash_bytes));
+
+    Ok(tx_hash_bytes)
 }
 
 /// Generate a temporary Ed25519 keypair for NFT minting

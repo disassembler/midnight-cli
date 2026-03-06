@@ -28,6 +28,9 @@ prost-types = "0.13"
 # Hayate for Plutus transaction building (path dependency, linked via Nix flake)
 hayate = { path = "../hayate", default-features = false }
 
+# Pallas for Cardano operations
+pallas-crypto = "0.35"
+
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }
 
