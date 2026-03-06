@@ -1158,16 +1158,83 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  TA datum:       {} bytes", ta_datum.len());
     eprintln!();
 
-    // 5. For now, return error indicating work in progress
+    // 5. Generate temporary keys for NFT minting
+    eprintln!("🔑 Generating temporary keys for NFT minting...");
+    let (council_mint_key, council_mint_vkey_hash) = generate_ed25519_keypair()?;
+    let (ta_mint_key, ta_mint_vkey_hash) = generate_ed25519_keypair()?;
+
+    // Create minting policies
+    let council_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(council_mint_vkey_hash);
+    let ta_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(ta_mint_vkey_hash);
+
+    let council_policy_id = council_mint_policy.policy_id()
+        .map_err(|e| anyhow::anyhow!("Failed to calculate council NFT policy ID: {}", e))?;
+    let ta_policy_id = ta_mint_policy.policy_id()
+        .map_err(|e| anyhow::anyhow!("Failed to calculate TA NFT policy ID: {}", e))?;
+
+    eprintln!("  Council NFT policy:  {}", hex::encode(council_policy_id));
+    eprintln!("  TA NFT policy:       {}", hex::encode(ta_policy_id));
+    eprintln!();
+
+    // 6. Query wallet UTxOs via UTxORPC
+    eprintln!("🔍 Querying wallet UTxOs from {}...", args.utxorpc);
+
+    // TODO: Load wallet and get addresses
+    // For now, return error indicating remaining work
     anyhow::bail!(
-        "Contract deployment implementation in progress.\n\n\
-        Next steps:\n\
-        1. Generate temporary keys for NFT minting\n\
-        2. Query UTxOs via UTxORPC\n\
-        3. Build deployment transactions\n\
-        4. Submit transactions\n\
-        5. Save deployment info"
+        "✅ Contract preparation complete!\n\n\
+        Validated:\n\
+        ✓ Contract scripts loaded ({} + {} bytes)\n\
+        ✓ Governance members parsed ({} council, {} TA)\n\
+        ✓ Script addresses calculated\n\
+        ✓ Datums constructed and encoded\n\
+        ✓ NFT minting policies generated\n\
+        \n\
+        Remaining implementation:\n\
+        • Load wallet from storage\n\
+        • Query wallet UTxOs via UTxORPC\n\
+        • Select funding and collateral UTxOs\n\
+        • Build deployment transactions\n\
+        • Sign and submit transactions\n\
+        • Save deployment info to {}\n\
+        \n\
+        Council Policy: {}\n\
+        TA Policy:      {}",
+        council_script_bytes.len(),
+        ta_script_bytes.len(),
+        council_members.len(),
+        ta_members.len(),
+        args.output.display(),
+        hex::encode(council_policy_id),
+        hex::encode(ta_policy_id)
     );
+}
+
+/// Generate a temporary Ed25519 keypair for NFT minting
+/// Returns (secret_key, vkey_hash)
+fn generate_ed25519_keypair() -> Result<(Vec<u8>, [u8; 28])> {
+    use sha2::{Sha256, Digest};
+    use sp_core::crypto::Pair;
+
+    // Generate random 32 bytes for Ed25519 secret key
+    let mut secret_key = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut secret_key);
+
+    // Derive public key using sp_core's Ed25519 implementation
+    let keypair = sp_core::ed25519::Pair::from_seed_slice(&secret_key)
+        .map_err(|e| anyhow::anyhow!("Failed to create Ed25519 keypair: {:?}", e))?;
+    let public_key = keypair.public();
+    let public_bytes: &[u8] = public_key.as_ref();
+
+    // Calculate vkey hash: SHA256 then take first 28 bytes
+    let mut hasher = Sha256::new();
+    hasher.update(public_bytes);
+    let hash = hasher.finalize();
+
+    let mut vkey_hash = [0u8; 28];
+    vkey_hash.copy_from_slice(&hash[..28]);
+
+    Ok((secret_key.to_vec(), vkey_hash))
 }
 
 /// Load governance members from JSON files
