@@ -1,7 +1,7 @@
 use crate::application::KeyGeneration;
 use crate::crypto::Sr25519;
 use crate::domain::KeyPurpose;
-use crate::storage::KeyReader;
+use crate::storage::{CardanoKeyFile, KeyReader};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,14 @@ pub struct GovernanceGenerateArgs {
     #[arg(long)]
     pub mnemonic_file: Option<PathBuf>,
 
+    /// Cardano Ed25519 verification key file (.vkey)
+    #[arg(long)]
+    pub cardano_vkey: PathBuf,
+
+    /// Derivation path for sr25519 key
+    #[arg(long, default_value = "//midnight//governance")]
+    pub derivation: String,
+
     /// Output file for public key JSON
     #[arg(long, default_value = "governance-key.json")]
     pub output: PathBuf,
@@ -38,8 +46,11 @@ pub struct GovernanceGenerateArgs {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GovernanceKey {
-    pub key_type: String,
-    pub public_key_hex: String,
+    /// Ed25519 verification key hash for Cardano operations (28 bytes hex)
+    pub cardano_key_hash: String,
+    /// Sr25519 public key for Midnight governance (32 bytes hex)
+    pub sr25519_public_key: String,
+    /// SS58 address of the sr25519 key (for reference)
     pub ss58_address: String,
 }
 
@@ -50,7 +61,31 @@ pub fn handle_governance_command(cmd: GovernanceCommands) -> Result<()> {
 }
 
 fn handle_governance_generate(args: GovernanceGenerateArgs) -> Result<()> {
-    // Get mnemonic
+    use pallas_crypto::hash::Hasher;
+
+    // 1. Read Cardano Ed25519 verification key and calculate key hash
+    eprintln!("📖 Reading Cardano verification key...");
+    let cardano_vkey = crate::storage::CardanoKeyFile::read_from_file(&args.cardano_vkey)?;
+    let cardano_pubkey_bytes = cardano_vkey.decode_key_bytes()?;
+
+    if cardano_pubkey_bytes.len() != 32 {
+        anyhow::bail!(
+            "Invalid Cardano Ed25519 public key length: expected 32 bytes, got {}",
+            cardano_pubkey_bytes.len()
+        );
+    }
+
+    // Calculate key hash: BLAKE2b-224 of public key
+    let hash: pallas_crypto::hash::Hash<28> = Hasher::<224>::hash(&cardano_pubkey_bytes);
+    let cardano_key_hash_bytes = hash.as_ref();
+    let cardano_key_hash = hex::encode(cardano_key_hash_bytes);
+
+    eprintln!("  Cardano pubkey: {}", hex::encode(&cardano_pubkey_bytes));
+    eprintln!("  Key hash:       {}", cardano_key_hash);
+    eprintln!();
+
+    // 2. Get mnemonic for Midnight sr25519 key
+    eprintln!("🔑 Deriving Midnight governance key...");
     let mnemonic = if let Some(ref file) = args.mnemonic_file {
         KeyReader::read_mnemonic_from_file(file)?
     } else if let Some(ref phrase) = args.mnemonic {
@@ -66,36 +101,47 @@ fn handle_governance_generate(args: GovernanceGenerateArgs) -> Result<()> {
 
     let mnemonic_str = secrecy::ExposeSecret::expose_secret(&mnemonic);
 
-    // Generate governance key (sr25519)
-    let governance_suri = format!("{}//midnight//governance", mnemonic_str);
+    // 3. Generate Midnight governance key (sr25519) with custom derivation
+    let governance_suri = format!("{}{}", mnemonic_str, args.derivation);
     let governance_pair = Sr25519::from_suri(&governance_suri)?;
     let governance_public = Sr25519::public_key(&governance_pair);
     let governance_public_bytes: &[u8] = governance_public.as_ref();
 
-    // Create public key JSON
+    eprintln!("  Derivation:     {}", args.derivation);
+    eprintln!("  Sr25519 pubkey: {}", hex::encode(governance_public_bytes));
+    eprintln!("  SS58 address:   {}", Sr25519::to_ss58_address(&governance_public));
+    eprintln!();
+
+    // 4. Create governance member JSON for contract deployment
     let governance_key = GovernanceKey {
-        key_type: "sr25519".to_string(),
-        public_key_hex: hex::encode(governance_public_bytes),
+        cardano_key_hash,
+        sr25519_public_key: hex::encode(governance_public_bytes),
         ss58_address: Sr25519::to_ss58_address(&governance_public),
     };
 
-    // Write JSON file
+    // 5. Write JSON file
     let json = serde_json::to_string_pretty(&governance_key)?;
     std::fs::write(&args.output, json)?;
 
-    println!("✓ Governance key generated:");
-    println!("  Type:       {}", governance_key.key_type);
-    println!("  Public key: {}", governance_key.public_key_hex);
-    println!("  SS58:       {}", governance_key.ss58_address);
+    println!("✅ Governance member file generated!");
     println!();
-    println!("✓ Public key written to: {}", args.output.display());
+    println!("Output: {}", args.output.display());
+    println!();
+    println!("This file contains:");
+    println!("  • Cardano Ed25519 key hash (for Cardano transaction authorization)");
+    println!("  • Midnight sr25519 public key (for governance operations)");
+    println!("  • SS58 address (for reference)");
+    println!();
+    println!("Use with: midnight-cli genesis deploy-contracts --council-member {} ...", args.output.display());
 
-    // Optionally write key files
+    // 6. Optionally write sr25519 key files
     if args.write_key_files {
+        eprintln!();
+        eprintln!("📝 Writing Midnight key files...");
         let governance_key_material = Sr25519::to_key_material(
             &governance_pair,
             KeyPurpose::Governance,
-            Some("//midnight//governance".to_string()),
+            Some(args.derivation.clone()),
         );
         let (skey, vkey) = crate::storage::KeyWriter::write_cardano_key_pair(
             &governance_key_material,
@@ -103,8 +149,6 @@ fn handle_governance_generate(args: GovernanceGenerateArgs) -> Result<()> {
             "governance",
         )?;
 
-        println!();
-        println!("✓ Key files written:");
         println!("  Signing key:      {}", skey.display());
         println!("  Verification key: {}", vkey.display());
     }

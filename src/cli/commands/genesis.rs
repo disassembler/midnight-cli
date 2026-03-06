@@ -204,8 +204,11 @@ pub struct KeyData {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GovernanceKeyInput {
-    pub key_type: String,
-    pub public_key_hex: String,
+    /// Ed25519 verification key hash for Cardano operations (28 bytes hex)
+    pub cardano_key_hash: String,
+    /// Sr25519 public key for Midnight governance (32 bytes hex)
+    pub sr25519_public_key: String,
+    /// SS58 address of the sr25519 key (for reference)
     pub ss58_address: String,
 }
 
@@ -1522,8 +1525,24 @@ fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::walle
         let gov_key: GovernanceKeyInput = serde_json::from_str(&json_str)
             .with_context(|| format!("Failed to parse member JSON: {}", file_path.display()))?;
 
-        // Convert hex public key to bytes
-        let sr25519_hex = gov_key.public_key_hex.trim_start_matches("0x");
+        // Parse Cardano Ed25519 key hash (28 bytes)
+        let cardano_hex = gov_key.cardano_key_hash.trim_start_matches("0x");
+        let cardano_bytes = hex::decode(cardano_hex)
+            .with_context(|| format!("Invalid Cardano key hash hex in {}", file_path.display()))?;
+
+        if cardano_bytes.len() != 28 {
+            anyhow::bail!(
+                "Invalid Cardano key hash length in {}: expected 28 bytes, got {}",
+                file_path.display(),
+                cardano_bytes.len()
+            );
+        }
+
+        let mut cardano_hash = [0u8; 28];
+        cardano_hash.copy_from_slice(&cardano_bytes);
+
+        // Parse sr25519 public key (32 bytes)
+        let sr25519_hex = gov_key.sr25519_public_key.trim_start_matches("0x");
         let sr25519_bytes = hex::decode(sr25519_hex)
             .with_context(|| format!("Invalid sr25519 key hex in {}", file_path.display()))?;
 
@@ -1538,10 +1557,6 @@ fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::walle
         let mut sr25519_key = [0u8; 32];
         sr25519_key.copy_from_slice(&sr25519_bytes);
 
-        // Calculate Cardano payment credential hash from SS58 address
-        // For governance contracts, we need the 28-byte payment credential
-        let cardano_hash = calculate_cardano_credential(&gov_key.ss58_address)?;
-
         members.push(hayate::wallet::plutus::GovernanceMember {
             cardano_hash,
             sr25519_key,
@@ -1551,27 +1566,6 @@ fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::walle
     Ok(members)
 }
 
-/// Calculate Cardano payment credential (28 bytes) from sr25519 public key
-fn calculate_cardano_credential(ss58_address: &str) -> Result<[u8; 28]> {
-    use sp_core::crypto::Ss58Codec;
-    use sha2::{Sha256, Digest};
-
-    // Decode SS58 address to get sr25519 public key
-    let pubkey = sp_core::sr25519::Public::from_ss58check(ss58_address)
-        .map_err(|e| anyhow::anyhow!("Failed to decode SS58 address '{}': {}", ss58_address, e))?;
-
-    // Hash the public key with SHA256 to get 32 bytes, then take first 28 bytes
-    // This matches Cardano's payment credential format
-    let mut hasher = Sha256::new();
-    let pubkey_bytes: &[u8] = pubkey.as_ref();
-    hasher.update(pubkey_bytes);
-    let hash = hasher.finalize();
-
-    let mut credential = [0u8; 28];
-    credential.copy_from_slice(&hash[..28]);
-
-    Ok(credential)
-}
 
 /// Build VersionedMultisig datum
 fn build_governance_datum(
