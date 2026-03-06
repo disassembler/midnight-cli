@@ -14,6 +14,8 @@ pub enum GenesisCommands {
     Cnight(CnightGenesisArgs),
     /// Export network specs as QR code for Polkadot Vault
     ExportNetwork(ExportNetworkArgs),
+    /// Deploy governance contracts to Cardano
+    DeployContracts(DeployContractsArgs),
 }
 
 #[derive(Args)]
@@ -121,6 +123,61 @@ pub struct ExportNetworkArgs {
     pub color: String,
 }
 
+#[derive(Args)]
+pub struct DeployContractsArgs {
+    /// Path to Council governance script CBOR file
+    #[arg(long)]
+    pub council_contract: PathBuf,
+
+    /// Path to Technical Advisory governance script CBOR file
+    #[arg(long)]
+    pub ta_contract: PathBuf,
+
+    /// Path to Council member JSON files (can be specified multiple times)
+    #[arg(long = "council-member")]
+    pub council_members: Vec<PathBuf>,
+
+    /// Path to TA member JSON files (can be specified multiple times)
+    #[arg(long = "ta-member")]
+    pub ta_members: Vec<PathBuf>,
+
+    /// Threshold for Council multisig
+    #[arg(long, default_value = "2")]
+    pub council_threshold: u32,
+
+    /// Threshold for TA multisig
+    #[arg(long, default_value = "2")]
+    pub ta_threshold: u32,
+
+    /// Network (mainnet or testnet)
+    #[arg(long, default_value = "testnet")]
+    pub network: String,
+
+    /// UTxORPC endpoint for querying UTxOs and submitting transactions
+    #[arg(long, default_value = "http://localhost:50051")]
+    pub utxorpc: String,
+
+    /// Wallet name to use for funding and signing
+    #[arg(long)]
+    pub wallet: String,
+
+    /// Account index within the wallet
+    #[arg(long, default_value = "0")]
+    pub account: u32,
+
+    /// Amount to lock in each contract (lovelace)
+    #[arg(long, default_value = "50000000")]
+    pub contract_amount: u64,
+
+    /// Transaction fee (lovelace)
+    #[arg(long, default_value = "200000")]
+    pub fee: u64,
+
+    /// Output file for deployment information (addresses, policy IDs, tx hashes)
+    #[arg(long, default_value = "deployment-info.json")]
+    pub output: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ValidatorKeysInput {
     pub node_key: KeyData,
@@ -214,6 +271,7 @@ pub async fn handle_genesis_command(cmd: GenesisCommands) -> Result<()> {
         GenesisCommands::Init(args) => handle_genesis_init(args).await,
         GenesisCommands::Cnight(args) => handle_cnight_genesis(args),
         GenesisCommands::ExportNetwork(args) => handle_export_network(args),
+        GenesisCommands::DeployContracts(args) => handle_deploy_contracts(args).await,
     }
 }
 
@@ -1033,4 +1091,157 @@ fn handle_export_network(args: ExportNetworkArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Deployment information output
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeploymentInfo {
+    pub council_address: String,
+    pub council_policy_id: String,
+    pub council_nft_policy: String,
+    pub council_tx_hash: String,
+    pub ta_address: String,
+    pub ta_policy_id: String,
+    pub ta_nft_policy: String,
+    pub ta_tx_hash: String,
+}
+
+async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
+    eprintln!("🚀 Deploying governance contracts to Cardano");
+    eprintln!();
+
+    // 1. Load contract CBOR files
+    eprintln!("📖 Loading contract scripts...");
+    let council_script_bytes = fs::read(&args.council_contract)
+        .with_context(|| format!("Failed to read council contract: {}", args.council_contract.display()))?;
+    let ta_script_bytes = fs::read(&args.ta_contract)
+        .with_context(|| format!("Failed to read TA contract: {}", args.ta_contract.display()))?;
+
+    eprintln!("  Council contract:  {} bytes", council_script_bytes.len());
+    eprintln!("  TA contract:       {} bytes", ta_script_bytes.len());
+    eprintln!();
+
+    // 2. Load governance members
+    eprintln!("📖 Loading governance members...");
+    let council_members = load_governance_members(&args.council_members)?;
+    let ta_members = load_governance_members(&args.ta_members)?;
+
+    eprintln!("  Council members:   {}", council_members.len());
+    eprintln!("  TA members:        {}", ta_members.len());
+    eprintln!("  Council threshold: {}", args.council_threshold);
+    eprintln!("  TA threshold:      {}", args.ta_threshold);
+    eprintln!();
+
+    // 3. Calculate script addresses
+    let network = match args.network.as_str() {
+        "mainnet" => hayate::wallet::plutus::Network::Mainnet,
+        "testnet" => hayate::wallet::plutus::Network::Testnet,
+        _ => anyhow::bail!("Invalid network: {}. Use 'mainnet' or 'testnet'", args.network),
+    };
+
+    let council_addr = hayate::wallet::plutus::script_address(&council_script_bytes, network)
+        .map_err(|e| anyhow::anyhow!("Failed to calculate council address: {}", e))?;
+    let ta_addr = hayate::wallet::plutus::script_address(&ta_script_bytes, network)
+        .map_err(|e| anyhow::anyhow!("Failed to calculate TA address: {}", e))?;
+
+    eprintln!("📍 Contract addresses:");
+    eprintln!("  Council:  {}", hex::encode(&council_addr));
+    eprintln!("  TA:       {}", hex::encode(&ta_addr));
+    eprintln!();
+
+    // 4. Build datums
+    eprintln!("🔨 Building contract datums...");
+    let council_datum = build_governance_datum(&council_members, args.council_threshold)?;
+    let ta_datum = build_governance_datum(&ta_members, args.ta_threshold)?;
+
+    eprintln!("  Council datum:  {} bytes", council_datum.len());
+    eprintln!("  TA datum:       {} bytes", ta_datum.len());
+    eprintln!();
+
+    // 5. For now, return error indicating work in progress
+    anyhow::bail!(
+        "Contract deployment implementation in progress.\n\n\
+        Next steps:\n\
+        1. Generate temporary keys for NFT minting\n\
+        2. Query UTxOs via UTxORPC\n\
+        3. Build deployment transactions\n\
+        4. Submit transactions\n\
+        5. Save deployment info"
+    );
+}
+
+/// Load governance members from JSON files
+fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::wallet::plutus::GovernanceMember>> {
+    let mut members = Vec::new();
+
+    for file_path in member_files {
+        let json_str = fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read member file: {}", file_path.display()))?;
+
+        let gov_key: GovernanceKeyInput = serde_json::from_str(&json_str)
+            .with_context(|| format!("Failed to parse member JSON: {}", file_path.display()))?;
+
+        // Convert hex public key to bytes
+        let sr25519_hex = gov_key.public_key_hex.trim_start_matches("0x");
+        let sr25519_bytes = hex::decode(sr25519_hex)
+            .with_context(|| format!("Invalid sr25519 key hex in {}", file_path.display()))?;
+
+        if sr25519_bytes.len() != 32 {
+            anyhow::bail!(
+                "Invalid sr25519 key length in {}: expected 32 bytes, got {}",
+                file_path.display(),
+                sr25519_bytes.len()
+            );
+        }
+
+        let mut sr25519_key = [0u8; 32];
+        sr25519_key.copy_from_slice(&sr25519_bytes);
+
+        // Calculate Cardano payment credential hash from SS58 address
+        // For governance contracts, we need the 28-byte payment credential
+        let cardano_hash = calculate_cardano_credential(&gov_key.ss58_address)?;
+
+        members.push(hayate::wallet::plutus::GovernanceMember {
+            cardano_hash,
+            sr25519_key,
+        });
+    }
+
+    Ok(members)
+}
+
+/// Calculate Cardano payment credential (28 bytes) from sr25519 public key
+fn calculate_cardano_credential(ss58_address: &str) -> Result<[u8; 28]> {
+    use sp_core::crypto::Ss58Codec;
+    use sha2::{Sha256, Digest};
+
+    // Decode SS58 address to get sr25519 public key
+    let pubkey = sp_core::sr25519::Public::from_ss58check(ss58_address)
+        .map_err(|e| anyhow::anyhow!("Failed to decode SS58 address '{}': {}", ss58_address, e))?;
+
+    // Hash the public key with SHA256 to get 32 bytes, then take first 28 bytes
+    // This matches Cardano's payment credential format
+    let mut hasher = Sha256::new();
+    let pubkey_bytes: &[u8] = pubkey.as_ref();
+    hasher.update(pubkey_bytes);
+    let hash = hasher.finalize();
+
+    let mut credential = [0u8; 28];
+    credential.copy_from_slice(&hash[..28]);
+
+    Ok(credential)
+}
+
+/// Build VersionedMultisig datum
+fn build_governance_datum(
+    members: &[hayate::wallet::plutus::GovernanceMember],
+    threshold: u32,
+) -> Result<Vec<u8>> {
+    let datum = hayate::wallet::plutus::VersionedMultisig::new(
+        threshold,
+        members.to_vec(),
+    );
+
+    datum.to_cbor()
+        .map_err(|e| anyhow::anyhow!("Failed to encode datum: {}", e))
 }
