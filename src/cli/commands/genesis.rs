@@ -1176,37 +1176,81 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  TA NFT policy:       {}", hex::encode(ta_policy_id));
     eprintln!();
 
-    // 6. Query wallet UTxOs via UTxORPC
-    eprintln!("🔍 Querying wallet UTxOs from {}...", args.utxorpc);
+    // 6. Show deployment readiness
+    eprintln!("✅ All prerequisites validated and prepared!");
+    eprintln!();
 
-    // TODO: Load wallet and get addresses
-    // For now, return error indicating remaining work
+    // 7. Return detailed summary
     anyhow::bail!(
-        "✅ Contract preparation complete!\n\n\
-        Validated:\n\
+        "Contract deployment ready - implementation in progress\n\n\
+        Prepared:\n\
         ✓ Contract scripts loaded ({} + {} bytes)\n\
         ✓ Governance members parsed ({} council, {} TA)\n\
         ✓ Script addresses calculated\n\
-        ✓ Datums constructed and encoded\n\
+        ✓ Datums constructed and encoded ({} + {} bytes)\n\
         ✓ NFT minting policies generated\n\
         \n\
-        Remaining implementation:\n\
-        • Load wallet from storage\n\
-        • Query wallet UTxOs via UTxORPC\n\
-        • Select funding and collateral UTxOs\n\
-        • Build deployment transactions\n\
-        • Sign and submit transactions\n\
-        • Save deployment info to {}\n\
+        Council Contract:\n\
+        • Script address:  {}\n\
+        • Script hash:     {}\n\
+        • NFT policy:      {}\n\
+        • Members:         {}\n\
+        • Threshold:       {}\n\
         \n\
-        Council Policy: {}\n\
-        TA Policy:      {}",
+        TA Contract:\n\
+        • Script address:  {}\n\
+        • Script hash:     {}\n\
+        • NFT policy:      {}\n\
+        • Members:         {}\n\
+        • Threshold:       {}\n\
+        \n\
+        Remaining steps (requires wallet mnemonic):\n\
+        1. Load wallet '{}' (account {})\n\
+        2. Derive Cardano payment address (CIP-1852)\n\
+        3. Query wallet UTxOs via UTxORPC ({})\n\
+        4. Select funding ({} ADA) and collateral UTxOs\n\
+        5. Build 2 deployment transactions:\n\
+        •  Mint Council NFT + lock with datum at contract address\n\
+           • Mint TA NFT + lock with datum at contract address\n\
+        6. Sign transactions (wallet key + temporary mint keys)\n\
+        7. Submit via UTxORPC and wait for confirmation\n\
+        8. Save deployment info to {}\n\
+        \n\
+        All cryptographic components are ready. Hayate's wallet module provides:\n\
+        • BIP39 mnemonic → root key derivation (ICARUS)\n\
+        • CIP-1852 HD wallet derivation (m/1852'/1815'/account'/0/index)\n\
+        • Shelley address generation with stake key\n\
+        • Transaction signing with Ed25519\n\
+        • UTxORPC client for queries and submission\n\
+        \n\
+        The PlutusTransactionBuilder in hayate supports:\n\
+        • NFT minting with native scripts\n\
+        • Multi-asset outputs (ADA + NFT)\n\
+        • Inline datums for contract deployment\n\
+        • Conway-era transaction building\n\
+        \n\
+        Next: Integrate wallet loading from midnight-cli storage or add --mnemonic flag.",
         council_script_bytes.len(),
         ta_script_bytes.len(),
         council_members.len(),
         ta_members.len(),
-        args.output.display(),
+        council_datum.len(),
+        ta_datum.len(),
+        hex::encode(&council_addr),
+        hex::encode(hayate::wallet::plutus::script_hash(&council_script_bytes)),
         hex::encode(council_policy_id),
-        hex::encode(ta_policy_id)
+        council_members.len(),
+        args.council_threshold,
+        hex::encode(&ta_addr),
+        hex::encode(hayate::wallet::plutus::script_hash(&ta_script_bytes)),
+        hex::encode(ta_policy_id),
+        ta_members.len(),
+        args.ta_threshold,
+        args.wallet,
+        args.account,
+        args.utxorpc,
+        args.contract_amount / 1_000_000,
+        args.output.display()
     );
 }
 
