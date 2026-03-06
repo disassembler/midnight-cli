@@ -251,6 +251,28 @@ cargo run -- genesis init \
 #    - registered-candidates-addresses.json
 # 4. Execute: midnight-node build-spec --disable-default-bootnode
 # 5. Output: chainspec/chain-spec.json (ready to use)
+
+# Export network specs as QR code for Polkadot Vault
+# Unsigned QR code (prints ASCII QR to terminal)
+cargo run -- genesis export-network \
+  --chainspec ./chainspec/chain-spec.json \
+  --name "Midnight Testnet" \
+  --unit NIGHT \
+  --decimals 18 \
+  --ss58-format 42
+
+# Signed QR code with verifier key (prints ASCII QR to terminal)
+cargo run -- genesis export-network \
+  --chainspec ./chainspec/chain-spec.json \
+  --signer-mnemonic-file ~/.midnight/network-signer.mnemonic \
+  --name "Midnight Testnet" \
+  --color "#6f42c1"
+
+# Export to PNG file
+cargo run -- genesis export-network \
+  --chainspec ./chainspec/chain-spec.json \
+  --out-file midnight-network.png \
+  --signer-mnemonic "seed phrase..."
 ```
 
 ## Architecture

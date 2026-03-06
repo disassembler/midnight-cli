@@ -12,6 +12,8 @@ pub enum GenesisCommands {
     Init(GenesisInitArgs),
     /// Generate cNight (Cardano bridge) genesis configuration
     Cnight(CnightGenesisArgs),
+    /// Export network specs as QR code for Polkadot Vault
+    ExportNetwork(ExportNetworkArgs),
 }
 
 #[derive(Args)]
@@ -78,6 +80,45 @@ pub struct CnightGenesisArgs {
     /// Output file for cNight genesis configuration
     #[arg(long, default_value = "cnight-genesis.json")]
     pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct ExportNetworkArgs {
+    /// Path to chain-spec.json file
+    #[arg(long)]
+    pub chainspec: PathBuf,
+
+    /// Output PNG file (if not specified, prints to stdout)
+    #[arg(long)]
+    pub out_file: Option<PathBuf>,
+
+    /// Signing key for network specs (mnemonic or derivation path)
+    #[arg(long)]
+    pub signer_mnemonic: Option<String>,
+
+    /// Path to mnemonic file for signing
+    #[arg(long)]
+    pub signer_mnemonic_file: Option<PathBuf>,
+
+    /// Network display name (overrides chainspec name)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Token decimals (default: 18)
+    #[arg(long, default_value = "18")]
+    pub decimals: u8,
+
+    /// Token unit/symbol (default: NIGHT)
+    #[arg(long, default_value = "NIGHT")]
+    pub unit: String,
+
+    /// SS58 address format (default: 42 for generic Substrate)
+    #[arg(long, default_value = "42")]
+    pub ss58_format: u16,
+
+    /// Network color for UI (hex format like #FF5733)
+    #[arg(long, default_value = "#6f42c1")]
+    pub color: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,6 +213,7 @@ pub async fn handle_genesis_command(cmd: GenesisCommands) -> Result<()> {
     match cmd {
         GenesisCommands::Init(args) => handle_genesis_init(args).await,
         GenesisCommands::Cnight(args) => handle_cnight_genesis(args),
+        GenesisCommands::ExportNetwork(args) => handle_export_network(args),
     }
 }
 
@@ -693,6 +735,302 @@ fn handle_cnight_genesis(args: CnightGenesisArgs) -> Result<()> {
     }
     println!();
     println!("✓ cNight genesis written to: {}", args.output.display());
+
+    Ok(())
+}
+
+use parity_scale_codec::{Encode, Decode};
+
+/// Encryption algorithm enum for Polkadot Vault
+#[derive(Debug, Clone, Encode, Decode)]
+#[repr(u8)]
+enum Encryption {
+    Ed25519 = 0,
+    Sr25519 = 1,
+    Ecdsa = 2,
+    Ethereum = 3,
+}
+
+/// Network specifications for Polkadot Vault (SCALE-encoded)
+/// Field order matters for SCALE encoding!
+#[derive(Debug, Clone, Encode, Decode)]
+struct NetworkSpecs {
+    /// Base58 prefix (SS58 format identifier)
+    base58prefix: u16,
+    /// Network color (hex string like "#6f42c1")
+    color: String,
+    /// Token decimals
+    decimals: u8,
+    /// Encryption algorithm
+    encryption: Encryption,
+    /// Genesis hash (32 bytes)
+    genesis_hash: [u8; 32],
+    /// Logo asset identifier (empty string if none)
+    logo: String,
+    /// Network name from metadata
+    name: String,
+    /// Default derivation path (empty string for default)
+    path_id: String,
+    /// Secondary UI color (empty string if none)
+    secondary_color: String,
+    /// User-facing display name
+    title: String,
+    /// Token symbol
+    unit: String,
+}
+
+fn handle_export_network(args: ExportNetworkArgs) -> Result<()> {
+    use sha2::{Sha256, Digest};
+    use sp_core::crypto::Ss58Codec;
+    use parity_scale_codec::Encode;
+    use crate::storage::KeyReader;
+    use secrecy::ExposeSecret;
+
+    eprintln!("📖 Reading chainspec file...");
+
+    // Read chainspec file
+    let chainspec_json = fs::read_to_string(&args.chainspec)
+        .with_context(|| format!("Failed to read chainspec file: {}", args.chainspec.display()))?;
+
+    let chainspec: serde_json::Value = serde_json::from_str(&chainspec_json)
+        .context("Failed to parse chainspec JSON")?;
+
+    // Extract network information
+    let network_name = args.name.unwrap_or_else(|| {
+        chainspec.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown Network")
+            .to_string()
+    });
+
+    let chain_id = chainspec.get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&network_name);
+
+    // Calculate genesis hash from genesis field
+    let genesis_hash_bytes = if let Some(genesis) = chainspec.get("genesis") {
+        // Hash the genesis object
+        let genesis_bytes = serde_json::to_vec(genesis)?;
+        let mut hasher = Sha256::new();
+        hasher.update(&genesis_bytes);
+        let hash_vec = hasher.finalize();
+        let mut hash_array = [0u8; 32];
+        hash_array.copy_from_slice(&hash_vec[..]);
+        hash_array
+    } else {
+        anyhow::bail!("Chainspec does not contain genesis field");
+    };
+
+    let genesis_hash_hex = format!("0x{}", hex::encode(genesis_hash_bytes));
+
+    eprintln!("✓ Chainspec loaded:");
+    eprintln!("  Name:          {}", network_name);
+    eprintln!("  Chain ID:      {}", chain_id);
+    eprintln!("  Genesis hash:  {}", genesis_hash_hex);
+    eprintln!("  SS58 format:   {}", args.ss58_format);
+    eprintln!("  Token:         {} (decimals: {})", args.unit, args.decimals);
+    eprintln!();
+
+    // Build network specs using SCALE encoding format
+    // Build default values matching Polkadot Vault expectations
+    let logo = chain_id.to_string(); // Use chain_id as logo identifier
+    let path_id = "//midnight".to_string(); // Default derivation path
+    let secondary_color = "#262626".to_string(); // Dark gray as secondary color
+
+    let network_specs = NetworkSpecs {
+        base58prefix: args.ss58_format,
+        color: args.color.clone(),
+        decimals: args.decimals,
+        encryption: Encryption::Sr25519,
+        genesis_hash: genesis_hash_bytes,
+        logo,
+        name: chain_id.to_string(),
+        path_id,
+        secondary_color,
+        title: network_name.clone(),
+        unit: args.unit.clone(),
+    };
+
+    // SCALE-encode the NetworkSpecs
+    let encoded_specs = network_specs.encode();
+
+    // Create payload with SCALE compact length prefix
+    // This is what Polkadot Vault expects: compact_length + SCALE_encoded_data
+    use parity_scale_codec::Compact;
+    let payload_len = Compact(encoded_specs.len() as u32);
+    let mut payload = payload_len.encode();
+    payload.extend_from_slice(&encoded_specs);
+
+    // Construct message envelope with prelude
+    let mut message = Vec::new();
+
+    // Handle signing if mnemonic provided
+    if args.signer_mnemonic.is_some() || args.signer_mnemonic_file.is_some() {
+        eprintln!("🔑 Generating signing key...");
+
+        let mnemonic = if let Some(ref mnemonic_str) = args.signer_mnemonic {
+            mnemonic_str.clone()
+        } else if let Some(ref mnemonic_file) = args.signer_mnemonic_file {
+            // Use KeyReader to support GPG-encrypted files (.asc, .gpg)
+            let secret_mnemonic = KeyReader::read_mnemonic_from_file(mnemonic_file)
+                .with_context(|| format!("Failed to read mnemonic file: {}", mnemonic_file.display()))?;
+            secret_mnemonic.expose_secret().to_string()
+        } else {
+            unreachable!()
+        };
+
+        // Derive signing key from mnemonic
+        let (pair, _seed) = sp_core::sr25519::Pair::from_phrase(&mnemonic, None)
+            .map_err(|e| anyhow::anyhow!("Failed to parse mnemonic: {:?}", e))?;
+
+        let public_key = pair.public();
+        let public_key_bytes: &[u8] = public_key.as_ref();
+        let public_key_hex = format!("0x{}", hex::encode(public_key_bytes));
+
+        eprintln!("✓ Signing key generated:");
+        eprintln!("  Public key:    {}", public_key_hex);
+        eprintln!("  SS58 address:  {}", public_key.to_ss58check());
+        eprintln!();
+
+        // Sign the SCALE-encoded NetworkSpecs (without length prefix)
+        use sp_core::crypto::Pair as PairTrait;
+        let signature = pair.sign(&encoded_specs);
+        let signature_bytes: &[u8] = signature.as_ref();
+
+        // Assemble signed message: prelude + pubkey + payload + signature
+        // Prelude: 0x53 + 0x01 (sr25519) + 0xc1 (add-specs)
+        message.push(0x53);
+        message.push(0x01); // Sr25519
+        message.push(0xc1); // Add-specs message type
+        message.extend_from_slice(public_key_bytes); // 32 bytes
+        message.extend_from_slice(&payload); // Compact length + SCALE-encoded NetworkSpecs
+        message.extend_from_slice(signature_bytes); // 64 bytes
+
+        eprintln!("✓ Payload signed");
+        eprintln!();
+    } else {
+        // Unsigned message: prelude + payload
+        // Prelude: 0x53 + 0xff (unsigned) + 0xc1 (add-specs)
+        message.push(0x53);
+        message.push(0xff); // Unsigned
+        message.push(0xc1); // Add-specs message type
+        message.extend_from_slice(&payload); // Compact length + SCALE-encoded NetworkSpecs
+
+        eprintln!("⚠️  No signing key provided (use --signer-mnemonic or --signer-mnemonic-file)");
+        eprintln!("   QR code will be unsigned - users will need to manually verify");
+        eprintln!();
+    }
+
+    // Hex representation for display only
+    let payload_hex = format!("0x{}", hex::encode(&message));
+
+    eprintln!("📊 Generating QR code...");
+    eprintln!("   Message size:  {} bytes (SCALE-encoded)", message.len());
+    eprintln!("   Hex payload:   {}", payload_hex);
+
+    // Output QR code
+    // NOTE: Polkadot Vault expects UTF-8 encoded QR data, not raw binary byte mode.
+    // The qrcode crate automatically UTF-8 encodes data when using the default API.
+    // This matches the format used by Parity's official QR codes.
+    if let Some(out_file) = args.out_file {
+        use qrcode::{QrCode as QrCodeBin, EcLevel};
+        use image::Luma;
+
+        // Create QR code with medium error correction for better scanning reliability
+        let qr = QrCodeBin::with_error_correction_level(&message, EcLevel::M)
+            .context("Failed to generate QR code from message")?;
+
+        // Render as PNG with 512x512 minimum dimensions
+        let img = qr.render::<Luma<u8>>()
+            .min_dimensions(512, 512)
+            .build();
+
+        img.save(&out_file)
+            .with_context(|| format!("Failed to save QR code to: {}", out_file.display()))?;
+
+        eprintln!();
+        eprintln!("✅ QR code exported successfully!");
+        eprintln!("   Output file:   {}", out_file.display());
+        eprintln!();
+        eprintln!("To import this network into Polkadot Vault:");
+        eprintln!("  1. Open Polkadot Vault app");
+        eprintln!("  2. Navigate to Scanner tab");
+        eprintln!("  3. Scan the QR code from {}", out_file.display());
+        eprintln!("  4. Review and approve the network specs");
+    } else {
+        // Generate ASCII QR code for terminal display using half-block characters
+        use qrcode::{QrCode, EcLevel};
+
+        // Create QR code with medium error correction (UTF-8 encoded by default)
+        let qr_code = QrCode::with_error_correction_level(&message, EcLevel::M)
+            .context("Failed to generate QR code - payload may be too large")?;
+
+        // Get QR code as matrix
+        let colors = qr_code.to_colors();
+        let width = qr_code.width();
+
+        // Convert to half-block characters (2 rows per line)
+        let mut output_lines = Vec::new();
+
+        // Add quiet zone (2 modules on each side, standard for QR codes)
+        let quiet_zone = 2;
+        let quiet_line = " ".repeat(width + quiet_zone * 2);
+
+        // Add top quiet zone
+        for _ in 0..quiet_zone {
+            output_lines.push(quiet_line.clone());
+        }
+
+        // Add QR code rows with side quiet zones
+        for row in (0..colors.len()).step_by(width * 2) {
+            let mut line = " ".repeat(quiet_zone);
+
+            for col in 0..width {
+                let top_idx = row + col;
+                let bottom_idx = row + width + col;
+
+                let top_dark = top_idx < colors.len() && colors[top_idx] != qrcode::Color::Light;
+                let bottom_dark = bottom_idx < colors.len() && colors[bottom_idx] != qrcode::Color::Light;
+
+                let ch = match (top_dark, bottom_dark) {
+                    (true, true) => '█',   // both dark
+                    (true, false) => '▀',  // top dark
+                    (false, true) => '▄',  // bottom dark
+                    (false, false) => ' ', // both light
+                };
+                line.push(ch);
+            }
+            line.push_str(&" ".repeat(quiet_zone));
+            output_lines.push(line);
+        }
+
+        // Add bottom quiet zone
+        for _ in 0..quiet_zone {
+            output_lines.push(quiet_line.clone());
+        }
+
+        // Calculate dimensions for border
+        let qr_width = width + quiet_zone * 2;
+        let border_line = "█".repeat(qr_width + 2);
+
+        eprintln!();
+        eprintln!("✅ QR code generated:");
+        eprintln!();
+
+        // Print with border
+        println!("{}", border_line);
+        for line in output_lines {
+            println!("█{}█", line);
+        }
+        println!("{}", border_line);
+
+        eprintln!();
+        eprintln!("To import this network into Polkadot Vault:");
+        eprintln!("  1. Open Polkadot Vault app");
+        eprintln!("  2. Navigate to Scanner tab");
+        eprintln!("  3. Scan the QR code from your screen");
+        eprintln!("  4. Review and approve the network specs");
+    }
 
     Ok(())
 }

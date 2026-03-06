@@ -228,7 +228,7 @@ pub async fn build_proposal_call(
             // but subxt's dynamic API can't nest calls properly.
             //
             // Solution: Manually encode everything
-            use parity_scale_codec::Encode;
+            
 
             // Step 1: Encode the inner call
             let inner_call_bytes = api.tx().call_data(&inner_call)?;
