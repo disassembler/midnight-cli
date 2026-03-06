@@ -176,6 +176,14 @@ pub struct DeployContractsArgs {
     /// Output file for deployment information (addresses, policy IDs, tx hashes)
     #[arg(long, default_value = "deployment-info.json")]
     pub output: PathBuf,
+
+    /// Cardano wallet mnemonic (24 words) - use with caution
+    #[arg(long, conflicts_with = "mnemonic_file")]
+    pub mnemonic: Option<String>,
+
+    /// Path to file containing mnemonic (supports GPG encrypted .asc/.gpg files)
+    #[arg(long)]
+    pub mnemonic_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1176,7 +1184,32 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  TA NFT policy:       {}", hex::encode(ta_policy_id));
     eprintln!();
 
-    // 6. Show deployment readiness
+    // 6. Load wallet mnemonic
+    eprintln!("🔑 Loading Cardano wallet mnemonic...");
+    let mnemonic = load_wallet_mnemonic(&args)?;
+
+    // Convert network for hayate
+    let hayate_network = match network {
+        hayate::wallet::plutus::Network::Mainnet => hayate::wallet::Network::Mainnet,
+        hayate::wallet::plutus::Network::Testnet => hayate::wallet::Network::Testnet,
+    };
+
+    // Create wallet using the new Wallet type from hayate
+    use secrecy::ExposeSecret;
+    let wallet = hayate::wallet::Wallet::from_mnemonic_str(
+        mnemonic.expose_secret(),
+        hayate_network,
+        args.account,
+    ).map_err(|e| anyhow::anyhow!("Failed to create wallet: {}", e))?;
+
+    let payment_addr = wallet.payment_address(0)
+        .map_err(|e| anyhow::anyhow!("Failed to derive payment address: {}", e))?;
+
+    eprintln!("  Wallet account:    {}", args.account);
+    eprintln!("  Payment address:   {}", payment_addr);
+    eprintln!();
+
+    // 7. Show deployment readiness
     eprintln!("✅ All prerequisites validated and prepared!");
     eprintln!();
 
@@ -1204,17 +1237,20 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         • Members:         {}\n\
         • Threshold:       {}\n\
         \n\
-        Remaining steps (requires wallet mnemonic):\n\
-        1. Load wallet '{}' (account {})\n\
-        2. Derive Cardano payment address (CIP-1852)\n\
-        3. Query wallet UTxOs via UTxORPC ({})\n\
-        4. Select funding ({} ADA) and collateral UTxOs\n\
-        5. Build 2 deployment transactions:\n\
-        •  Mint Council NFT + lock with datum at contract address\n\
+        Wallet:\n\
+        • Name:            {}\n\
+        • Account:         {}\n\
+        • Payment address: {}\n\
+        \n\
+        Remaining steps:\n\
+        1. Query wallet UTxOs via UTxORPC ({})\n\
+        2. Select funding ({} ADA) and collateral UTxOs\n\
+        3. Build 2 deployment transactions:\n\
+           • Mint Council NFT + lock with datum at contract address\n\
            • Mint TA NFT + lock with datum at contract address\n\
-        6. Sign transactions (wallet key + temporary mint keys)\n\
-        7. Submit via UTxORPC and wait for confirmation\n\
-        8. Save deployment info to {}\n\
+        4. Sign transactions (wallet key + temporary mint keys)\n\
+        5. Submit via UTxORPC and wait for confirmation\n\
+        6. Save deployment info to {}\n\
         \n\
         All cryptographic components are ready. Hayate's wallet module provides:\n\
         • BIP39 mnemonic → root key derivation (ICARUS)\n\
@@ -1229,7 +1265,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         • Inline datums for contract deployment\n\
         • Conway-era transaction building\n\
         \n\
-        Next: Integrate wallet loading from midnight-cli storage or add --mnemonic flag.",
+        Next: Implement transaction building and submission logic.",
         council_script_bytes.len(),
         ta_script_bytes.len(),
         council_members.len(),
@@ -1248,6 +1284,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         args.ta_threshold,
         args.wallet,
         args.account,
+        payment_addr,
         args.utxorpc,
         args.contract_amount / 1_000_000,
         args.output.display()
@@ -1355,4 +1392,33 @@ fn build_governance_datum(
 
     datum.to_cbor()
         .map_err(|e| anyhow::anyhow!("Failed to encode datum: {}", e))
+}
+
+/// Load wallet mnemonic from CLI arguments
+/// Supports --mnemonic (direct) or --mnemonic-file (plain text or GPG encrypted)
+fn load_wallet_mnemonic(args: &DeployContractsArgs) -> Result<secrecy::SecretString> {
+    use crate::storage::KeyReader;
+
+    if let Some(ref mnemonic_str) = args.mnemonic {
+        // Direct mnemonic from CLI
+        eprintln!("  Source: --mnemonic argument");
+        KeyReader::read_mnemonic(mnemonic_str)
+            .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))
+    } else if let Some(ref mnemonic_file) = args.mnemonic_file {
+        // Load from file (supports GPG encryption)
+        if mnemonic_file.extension().map_or(false, |ext| ext == "gpg" || ext == "asc") {
+            eprintln!("  Source: {} (GPG encrypted)", mnemonic_file.display());
+        } else {
+            eprintln!("  Source: {} (plain text)", mnemonic_file.display());
+        }
+        KeyReader::read_mnemonic_from_file(mnemonic_file)
+            .map_err(|e| anyhow::anyhow!("Failed to read mnemonic file: {}", e))
+    } else {
+        anyhow::bail!(
+            "No mnemonic provided. Please specify either:\n\
+            --mnemonic \"your 24 word mnemonic phrase\"\n\
+            --mnemonic-file /path/to/mnemonic.txt\n\
+            --mnemonic-file /path/to/mnemonic.asc (GPG encrypted)"
+        )
+    }
 }
