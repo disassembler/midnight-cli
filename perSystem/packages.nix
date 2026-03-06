@@ -24,8 +24,8 @@
         ../Cargo.lock
         ../Cargo.toml
         ../build.rs
-        ../proto
         ../src
+        # Note: proto files now come from hayate flake input
       ];
     };
 
@@ -43,6 +43,13 @@
         cmake
         installShellFiles
       ];
+
+      # Link hayate from flake input as a path dependency
+      preConfigure = ''
+        mkdir -p ../hayate
+        cp -r ${inputs.hayate}/* ../hayate/
+        chmod -R +w ../hayate
+      '';
 
       meta = {
         description = "Key management and governance tooling for Midnight Network";
