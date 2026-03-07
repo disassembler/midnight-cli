@@ -16,6 +16,34 @@ The Midnight CLI provides secure, offline (air-gapped) cryptographic operations 
 - 📝 **Comprehensive Witnesses**: Full metadata and signature verification
 - 🔍 **Chain Query**: Query proposals, events, and extrinsics from Midnight nodes
 - 🏛️ **Governance Transactions**: Create, sign, and submit governance proposals with metadata-driven encoding
+- 📜 **Smart Contracts**: Aiken-based governance validators with 2/3 threshold and NFT-based singleton enforcement
+
+## Governance Smart Contracts
+
+This CLI includes Aiken smart contracts for on-chain governance of the Midnight Network:
+
+### Council Governance
+- Primary governance body for high-level network decisions
+- Requires **2/3 threshold** of council members to update
+- NFT-based singleton enforcement
+
+### Technical Authority Governance
+- Technical oversight and protocol upgrade decisions
+- Requires **2/3 threshold** of TA members to update
+- NFT-based singleton enforcement
+
+### Federated Operators Governance
+- Controls the permissioned validator set
+- Requires **2/3 of BOTH** council AND technical authority to update
+- Reads current governance state via reference inputs
+
+### Security Model
+- **One-Shot NFT Minting**: Each contract has a unique NFT minted from a consumed UTxO
+- **Threshold Signatures**: 2/3 majority prevents single-point-of-failure
+- **Continuity**: NFT must be in both inputs and outputs to prevent attacks
+- **Dual Approval**: Validator set changes require both governance bodies
+
+See [`validators/README.md`](validators/README.md) for compilation and deployment details.
 
 ## Installation
 
