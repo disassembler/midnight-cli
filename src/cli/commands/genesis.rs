@@ -141,14 +141,6 @@ pub struct DeployContractsArgs {
     #[arg(long = "ta-member")]
     pub ta_members: Vec<PathBuf>,
 
-    /// Threshold for Council multisig
-    #[arg(long, default_value = "2")]
-    pub council_threshold: u32,
-
-    /// Threshold for TA multisig
-    #[arg(long, default_value = "2")]
-    pub ta_threshold: u32,
-
     /// Network (mainnet or testnet)
     #[arg(long, default_value = "testnet")]
     pub network: String,
@@ -1146,8 +1138,13 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
 
     eprintln!("  Council members:   {}", council_members.len());
     eprintln!("  TA members:        {}", ta_members.len());
-    eprintln!("  Council threshold: {}", args.council_threshold);
-    eprintln!("  TA threshold:      {}", args.ta_threshold);
+
+    // Calculate 2/3 threshold automatically
+    let council_threshold = calculate_threshold(council_members.len());
+    let ta_threshold = calculate_threshold(ta_members.len());
+
+    eprintln!("  Council threshold: {} (auto-calculated 2/3)", council_threshold);
+    eprintln!("  TA threshold:      {} (auto-calculated 2/3)", ta_threshold);
     eprintln!();
 
     // 3. Calculate script addresses
@@ -1169,8 +1166,8 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
 
     // 4. Build datums
     eprintln!("🔨 Building contract datums...");
-    let council_datum = build_governance_datum(&council_members, args.council_threshold)?;
-    let ta_datum = build_governance_datum(&ta_members, args.ta_threshold)?;
+    let council_datum = build_governance_datum(&council_members)?;
+    let ta_datum = build_governance_datum(&ta_members)?;
 
     eprintln!("  Council datum:  {} bytes", council_datum.len());
     eprintln!("  TA datum:       {} bytes", ta_datum.len());
@@ -1326,7 +1323,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
             datum_cbor: hex::encode(&council_datum),
             tx_hash: hex::encode(&council_tx_hash),
             members: council_members.len(),
-            threshold: args.council_threshold,
+            threshold: council_threshold,
         },
         ta_contract: DeployedContract {
             script_hash: hex::encode(hayate::wallet::plutus::script_hash(&ta_script_bytes)),
@@ -1336,7 +1333,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
             datum_cbor: hex::encode(&ta_datum),
             tx_hash: hex::encode(&ta_tx_hash),
             members: ta_members.len(),
-            threshold: args.ta_threshold,
+            threshold: ta_threshold,
         },
     };
 
@@ -1351,10 +1348,55 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  TA contract:      {}", hex::encode(&ta_addr));
     eprintln!("  Deployment info:  {}", args.output.display());
     eprintln!();
-    eprintln!("Next steps:");
-    eprintln!("  1. Wait for transactions to confirm on chain");
-    eprintln!("  2. Use the deployment info file to interact with contracts");
-    eprintln!("  3. Update governance keys with rotate-council-keys / rotate-ta-keys");
+
+    // Print Hayate configuration instructions
+    eprintln!("═══════════════════════════════════════════════════════════════════");
+    eprintln!("  Next Steps: Configure Hayate for Governance Contract Indexing");
+    eprintln!("═══════════════════════════════════════════════════════════════════");
+    eprintln!();
+    eprintln!("1️⃣  Add governance script addresses to your Hayate configuration:");
+    eprintln!();
+    eprintln!("    scripts:");
+    eprintln!("      - name: \"council-governance\"");
+    eprintln!("        address: \"{}\"", hex::encode(&council_addr));
+    eprintln!("        nft_policy_id: \"{}\"", hex::encode(council_policy_id));
+    eprintln!();
+    eprintln!("      - name: \"ta-governance\"");
+    eprintln!("        address: \"{}\"", hex::encode(&ta_addr));
+    eprintln!("        nft_policy_id: \"{}\"", hex::encode(ta_policy_id));
+    eprintln!();
+    eprintln!("2️⃣  Export and add your wallet account public key:");
+    eprintln!();
+    eprintln!("    midnight-cli key export-account-key \\");
+    eprintln!("      --mnemonic-file <your-wallet.mnemonic> \\");
+    eprintln!("      --account {} \\", args.account);
+    eprintln!("      --format hex");
+    eprintln!();
+    eprintln!("    Then add the output to Hayate config:");
+    eprintln!();
+    eprintln!("    accounts:");
+    eprintln!("      - name: \"governance-wallet\"");
+    eprintln!("        account_index: {}", args.account);
+    eprintln!("        public_key: \"<hex-output-from-above>\"");
+    eprintln!();
+    eprintln!("3️⃣  Add the NIGHT token policy script to Hayate:");
+    eprintln!();
+    eprintln!("    tokens:");
+    eprintln!("      - policy_id: \"<NIGHT_POLICY_ID>\"");
+    eprintln!("        asset_name: \"NIGHT\"");
+    eprintln!("        decimals: 18");
+    eprintln!();
+    eprintln!("4️⃣  Restart Hayate to apply configuration:");
+    eprintln!();
+    eprintln!("    systemctl restart hayate");
+    eprintln!("    # or");
+    eprintln!("    docker-compose restart hayate");
+    eprintln!();
+    eprintln!("5️⃣  Wait for transactions to confirm on chain before proceeding");
+    eprintln!();
+    eprintln!("Once Hayate is indexing, you can use the governance contracts for");
+    eprintln!("on-chain multisig operations via the Midnight Network.");
+    eprintln!();
 
     Ok(())
 }
@@ -1567,13 +1609,21 @@ fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::walle
 }
 
 
+/// Calculate 2/3 threshold (rounds up)
+/// Matches the Aiken validator's calculate_threshold function: (2 * total + 2) / 3
+fn calculate_threshold(total: usize) -> u32 {
+    ((2 * total + 2) / 3) as u32
+}
+
 /// Build VersionedMultisig datum
+/// Note: The "threshold" parameter here is actually "total_signers" in the Aiken validator.
+/// The Aiken validator uses this to auto-calculate the 2/3 threshold.
 fn build_governance_datum(
     members: &[hayate::wallet::plutus::GovernanceMember],
-    threshold: u32,
 ) -> Result<Vec<u8>> {
+    // Pass members.len() as "total_signers" (misleadingly called "threshold" in hayate)
     let datum = hayate::wallet::plutus::VersionedMultisig::new(
-        threshold,
+        members.len() as u32,
         members.to_vec(),
     );
 
