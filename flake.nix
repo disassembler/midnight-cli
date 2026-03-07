@@ -13,6 +13,10 @@
     # Hayate for Plutus transaction building
     hayate.url = "github:disassembler/hayate";
     hayate.inputs.nixpkgs.follows = "nixpkgs";
+
+    # Aiken smart contract compiler
+    aiken.url = "github:aiken-lang/aiken/v1.1.21";
+    # Don't follow nixpkgs - let Aiken use its own nixos-unstable + rust-overlay
   };
 
   outputs = {

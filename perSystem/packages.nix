@@ -82,6 +82,7 @@
             installShellCompletion --fish midnight-cli.fish
           '';
         });
+      aiken = inputs'.aiken.packages.default;
     };
   };
 }
