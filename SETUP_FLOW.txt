@@ -1,0 +1,270 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    MIDNIGHT CHAIN SETUP - COMPLETE FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 1: KEY GENERATION (Air-Gapped, Parallel)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    Validator 1        Validator 2        Validator 3
+         │                  │                  │
+         ├─ Generate       ├─ Generate       ├─ Generate
+         │  Mnemonic       │  Mnemonic       │  Mnemonic
+         │                  │                  │
+         ├─ midnight-cli   ├─ midnight-cli   ├─ midnight-cli
+         │  validator       │  validator       │  validator
+         │  generate        │  generate        │  generate
+         │                  │                  │
+         └─► validator1-    └─► validator2-    └─► validator3-
+             keys.json          keys.json          keys.json
+             *.skey             *.skey             *.skey
+
+
+    TA Member 1        TA Member 2        TA Member 3
+         │                  │                  │
+         ├─ Generate       ├─ Generate       ├─ Generate
+         │  Mnemonic       │  Mnemonic       │  Mnemonic
+         │                  │                  │
+         ├─ midnight-cli   ├─ midnight-cli   ├─ midnight-cli
+         │  governance      │  governance      │  governance
+         │  generate        │  generate        │  generate
+         │                  │                  │
+         └─► ta1-           └─► ta2-           └─► ta3-
+             governance.json     governance.json     governance.json
+             *.skey             *.skey             *.skey
+
+
+    Council 1          Council 2          Council 3
+         │                  │                  │
+         ├─ Generate       ├─ Generate       ├─ Generate
+         │  Mnemonic       │  Mnemonic       │  Mnemonic
+         │                  │                  │
+         ├─ midnight-cli   ├─ midnight-cli   ├─ midnight-cli
+         │  governance      │  governance      │  governance
+         │  generate        │  generate        │  generate
+         │                  │                  │
+         └─► council1-      └─► council2-      └─► council3-
+             governance.json     governance.json     governance.json
+             *.skey             *.skey             *.skey
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ COLLECT: All *-keys.json and *-governance.json files                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                        ALL PUBLIC KEYS
+                  (validator + TA + council)
+                             │
+                             │ Transfer to online coordinator
+                             ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 2: DEPLOY GOVERNANCE CONTRACTS (Online + Cardano)                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌────────────────────────┐
+    │ Online Coordinator     │
+    └────────────────────────┘
+             │
+             ├─ Generate deployment wallet mnemonic
+             │
+             ├─ Fund wallet with ADA (testnet/mainnet)
+             │
+             ├─ midnight-cli genesis deploy-contracts
+             │  • Reads all council + TA governance.json files
+             │  • Builds governance datums (VersionedMultisig)
+             │  • Mints NFTs (council + TA)
+             │  • Locks NFTs + datums at script addresses
+             │
+             └─► deployment-info.json
+                 ┌─────────────────────────────────┐
+                 │ • Council contract address      │
+                 │ • Council NFT policy ID         │
+                 │ • TA contract address           │
+                 │ • TA NFT policy ID              │
+                 │ • Transaction hashes            │
+                 │ • Threshold (auto-calculated)   │
+                 └─────────────────────────────────┘
+                 + Hayate configuration instructions
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 2.5: CONFIGURE HAYATE (Online, for wallet indexing)                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌────────────────────────┐
+    │ Online Coordinator     │
+    └────────────────────────┘
+             │
+             ├─ midnight-cli key export-account-key
+             │  --mnemonic-file deployment-wallet.mnemonic
+             │  --account 0
+             │
+             └─► Account public key (hex)
+
+             ├─ Update hayate.yaml:
+             │  • Add script addresses (council + TA)
+             │  • Add NFT policy IDs
+             │  • Add account public key
+             │  • Add NIGHT token policy
+             │
+             ├─ Restart Hayate service
+             │
+             └─► Hayate indexes:
+                 ┌─────────────────────────────────┐
+                 │ • Governance contract UTxOs     │
+                 │ • Wallet addresses/balances     │
+                 │ • NIGHT token transfers         │
+                 └─────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 3: BUILD CHAIN SPEC (Online, needs midnight-node)                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌────────────────────────┐
+    │ Online Coordinator     │
+    └────────────────────────┘
+             │
+             ├─ midnight-cli genesis init
+             │  • All validator JSON files
+             │  • All TA governance JSON files
+             │  • All council governance JSON files
+             │  • $NIGHT policy ID
+             │  • Chain ID
+             │
+             ├─ Generates 8 chainspec configs:
+             │  ├─ permissioned-candidates-config.json
+             │  ├─ federated-authority-config.json
+             │  ├─ cnight-config.json
+             │  ├─ ics-config.json
+             │  ├─ reserve-config.json
+             │  ├─ pc-chain-config.json
+             │  ├─ system-parameters-config.json
+             │  └─ registered-candidates-addresses.json
+             │
+             ├─ Executes: midnight-node build-spec
+             │
+             └─► OUTPUT:
+                 ┌─────────────────────────────────┐
+                 │ genesis.json                    │
+                 │ chainspec/chain-spec.json       │
+                 └─────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 4: EXPORT FOR MOBILE (Optional)                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌────────────────────────┐
+    │ Online Coordinator     │
+    └────────────────────────┘
+             │
+             ├─ midnight-cli genesis export-network
+             │  • Reads chain-spec.json
+             │  • Generates network metadata
+             │  • Signs with network signer key
+             │
+             └─► network-qr.png
+                 (Import into Polkadot Vault)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 5: DISTRIBUTE & START VALIDATORS                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    Validator 1              Validator 2              Validator 3
+         │                        │                        │
+         │ Receives:              │ Receives:              │ Receives:
+         ├─ chain-spec.json       ├─ chain-spec.json       ├─ chain-spec.json
+         ├─ genesis.json          ├─ genesis.json          ├─ genesis.json
+         ├─ *.skey files          ├─ *.skey files          ├─ *.skey files
+         │  (from Phase 1)        │  (from Phase 1)        │  (from Phase 1)
+         │                        │                        │
+         ├─ midnight-node         ├─ midnight-node         ├─ midnight-node
+         │  --validator           │  --validator           │  --validator
+         │  --chain               │  --chain               │  --chain
+         │   chain-spec.json      │   chain-spec.json      │   chain-spec.json
+         │                        │                        │
+         └─► 🟢 RUNNING           └─► 🟢 RUNNING           └─► 🟢 RUNNING
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 6: ONGOING GOVERNANCE (Air-Gap Signing)                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌────────────────┐                    ┌─────────────────┐
+    │ Online Machine │                    │ Air-Gap Machine │
+    └────────────────┘                    └─────────────────┘
+            │                                      │
+            │ 1. Create Proposal                  │
+            ├─ midnight-cli tx propose            │
+            │                                      │
+            └─► proposal.payload ──────────────► │
+                                USB/QR            │
+                                                  │ 2. Sign
+                                                  ├─ midnight-cli
+                                                  │  witness create
+                                                  │  --mnemonic-file
+                                                  │
+            ┌──────────────────────────────────── │
+            │                    USB/QR           │
+            │ ◄─ signature.extrinsic              │
+            │                                      │
+            │ 3. Submit                            │
+            ├─ midnight-cli tx submit             │
+            │                                      │
+            ├─ ⏳ Wait for threshold...            │
+            │    (2/3 members sign)                │
+            │                                      │
+            │ 4. Close Proposal                    │
+            ├─ midnight-cli tx close              │
+            │                                      │
+            └─► ✅ Proposal Executed               │
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                              KEY SECURITY MODEL
+═══════════════════════════════════════════════════════════════════════════════
+
+    🔒 SECRETS (Air-Gap Only):
+       • *.mnemonic files (24 words)
+       • *.skey files (signing keys)
+
+    🔓 PUBLIC (Safe to Share):
+       • *-keys.json files (public keys)
+       • *-governance.json files (public keys)
+       • genesis.json
+       • chain-spec.json
+       • deployment-info.json
+
+    🔐 DUAL-KEY ARCHITECTURE:
+       Each participant has ONE mnemonic that derives:
+       ├─ Cardano Ed25519 key (for governance contracts)
+       └─ Midnight SR25519 key (for consensus/finality)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                            TIMELINE & DEPENDENCIES
+═══════════════════════════════════════════════════════════════════════════════
+
+    Phase 1: Generate Keys          │ ⏱️  ~5 min/person │ Parallel ✅
+    ─────────────────────────────────┼────────────────────┼──────────────
+    Phase 2: Deploy Contracts       │ ⏱️  ~15 min       │ Serial ❌
+                                    │                    │ (needs Phase 1)
+    ─────────────────────────────────┼────────────────────┼──────────────
+    Phase 2.5: Configure Hayate     │ ⏱️  ~3 min        │ Serial ❌
+                                    │                    │ (needs Phase 2)
+    ─────────────────────────────────┼────────────────────┼──────────────
+    Phase 3: Build Chain Spec       │ ⏱️  ~5 min        │ Serial ❌
+                                    │                    │ (needs Phase 2.5)
+    ─────────────────────────────────┼────────────────────┼──────────────
+    Phase 4: Export QR (optional)   │ ⏱️  ~1 min        │ Parallel ✅
+    ─────────────────────────────────┼────────────────────┼──────────────
+    Phase 5: Start Validators       │ ⏱️  ~2 min/node   │ Parallel ✅
+    ─────────────────────────────────┴────────────────────┴──────────────
+
+    TOTAL: ~35-50 minutes for full setup
+
+
+═══════════════════════════════════════════════════════════════════════════════
