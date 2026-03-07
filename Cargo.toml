@@ -30,6 +30,14 @@ hayate = { path = "../hayate", default-features = false }
 
 # Pallas for Cardano operations
 pallas-crypto = "0.35"
+pallas-primitives = "0.35"
+pallas-codec = "0.35"
+
+# Pallas 0.33 for uplc compatibility (aliased)
+pallas-codec-v033 = { package = "pallas-codec", version = "0.33" }
+
+# Plutus script utilities
+uplc = "1.1.21"
 
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }

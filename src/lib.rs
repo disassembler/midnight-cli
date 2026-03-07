@@ -2,6 +2,7 @@
 
 pub mod application;
 pub mod cli;
+pub mod contracts;
 pub mod crypto;
 pub mod domain;
 pub mod storage;
