@@ -84,6 +84,10 @@ cargo run -- key derive --mnemonic-file mnemonic.txt --derivation "//midnight//g
 # Inspect a key file
 cargo run -- key inspect governance-0.skey
 
+# Export Cardano account public key for Hayate wallet indexing
+cargo run -- key export-account-key --mnemonic-file mnemonic.txt --account 0 --format hex
+cargo run -- key export-account-key --mnemonic-file mnemonic.txt --account 0 --format json
+
 # Create a witness from key file
 cargo run -- witness create --payload proposal.bin --key-file governance-0.skey --output witness.json --yes
 
