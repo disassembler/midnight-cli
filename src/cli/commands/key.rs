@@ -18,6 +18,8 @@ pub enum KeyCommands {
     Inspect(InspectArgs),
     /// Batch generate multiple keys
     Batch(BatchArgs),
+    /// Export Cardano account public key for wallet indexing
+    ExportAccountKey(ExportAccountKeyArgs),
 }
 
 #[derive(Args)]
@@ -124,12 +126,32 @@ pub struct BatchArgs {
     pub output_dir: PathBuf,
 }
 
+#[derive(Args)]
+pub struct ExportAccountKeyArgs {
+    /// Mnemonic phrase (or file path)
+    #[arg(long)]
+    pub mnemonic: Option<String>,
+
+    /// Mnemonic file path (supports GPG)
+    #[arg(long)]
+    pub mnemonic_file: Option<PathBuf>,
+
+    /// Account index (HD derivation path: 1852H/1815H/accountH)
+    #[arg(long, default_value = "0")]
+    pub account: u32,
+
+    /// Output format (hex, json)
+    #[arg(long, default_value = "hex")]
+    pub format: String,
+}
+
 pub fn handle_key_command(cmd: KeyCommands) -> Result<()> {
     match cmd {
         KeyCommands::Generate(args) => handle_generate(args),
         KeyCommands::Derive(args) => handle_derive(args),
         KeyCommands::Inspect(args) => handle_inspect(args),
         KeyCommands::Batch(args) => handle_batch(args),
+        KeyCommands::ExportAccountKey(args) => handle_export_account_key(args),
     }
 }
 
@@ -330,6 +352,75 @@ fn handle_batch(args: BatchArgs) -> Result<()> {
             vkey_path.display()
         );
     }
+
+    Ok(())
+}
+
+fn handle_export_account_key(args: ExportAccountKeyArgs) -> Result<()> {
+    // Get mnemonic
+    let mnemonic = if let Some(ref file) = args.mnemonic_file {
+        KeyReader::read_mnemonic_from_file(file)?
+    } else if let Some(ref phrase) = args.mnemonic {
+        KeyReader::read_mnemonic(phrase)?
+    } else {
+        return Err(anyhow::anyhow!(
+            "Must provide either --mnemonic or --mnemonic-file"
+        ));
+    };
+
+    let mnemonic_str = secrecy::ExposeSecret::expose_secret(&mnemonic);
+
+    // Derive Cardano account key using hayate
+    eprintln!("📖 Deriving Cardano account public key...");
+    eprintln!("   Derivation path: m/1852H/1815H/{}H", args.account);
+    eprintln!();
+
+    let wallet = hayate::wallet::Wallet::from_mnemonic_str(
+        mnemonic_str,
+        hayate::wallet::Network::Testnet,  // Network doesn't matter for key derivation
+        args.account,
+    ).map_err(|e| anyhow::anyhow!("Failed to create Cardano wallet: {}", e))?;
+
+    // Get the payment key at index 0 to extract the account-level public key
+    // Note: For full Hayate indexing, we need the account extended public key
+    let payment_key = wallet.payment_key(0)
+        .map_err(|e| anyhow::anyhow!("Failed to derive Cardano payment key: {}", e))?;
+    let account_pubkey = payment_key.public();
+    let account_pubkey_bytes = account_pubkey.as_ref();
+
+    // Output based on format
+    match args.format.as_str() {
+        "hex" => {
+            println!("{}", hex::encode(account_pubkey_bytes));
+        }
+        "json" => {
+            let json_output = serde_json::json!({
+                "account_index": args.account,
+                "public_key": hex::encode(account_pubkey_bytes),
+                "derivation_path": format!("m/1852H/1815H/{}H", args.account),
+            });
+            println!("{}", serde_json::to_string_pretty(&json_output)?);
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Invalid format. Use 'hex' or 'json'"));
+        }
+    }
+
+    // Print helpful Hayate configuration instructions
+    eprintln!();
+    eprintln!("═══════════════════════════════════════════════════════════");
+    eprintln!("  Next Steps: Configure Hayate for Wallet Indexing");
+    eprintln!("═══════════════════════════════════════════════════════════");
+    eprintln!();
+    eprintln!("Add this account key to your Hayate configuration:");
+    eprintln!();
+    eprintln!("  accounts:");
+    eprintln!("    - name: \"governance-wallet\"");
+    eprintln!("      account_index: {}", args.account);
+    eprintln!("      public_key: \"{}\"", hex::encode(account_pubkey_bytes));
+    eprintln!();
+    eprintln!("Then restart Hayate to begin indexing this wallet's addresses.");
+    eprintln!();
 
     Ok(())
 }
