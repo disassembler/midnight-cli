@@ -147,7 +147,7 @@ fn convert_plutus_data_to_uplc(data: pallas_primitives::PlutusData) -> Result<up
 /// Create OutputReference as PlutusData (for one-shot NFT parameter)
 ///
 /// This creates the Plutus Data representation of OutputReference:
-/// ```
+/// ```text
 /// data OutputReference {
 ///   TransactionId { transaction_id: Hash<Blake2b_256, Transaction> },
 ///   Int
