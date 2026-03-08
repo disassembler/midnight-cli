@@ -1256,51 +1256,14 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     eprintln!("  TA threshold:      {} (auto-calculated 2/3)", ta_threshold);
     eprintln!();
 
-    // 3. Calculate script addresses
+    // 3. Determine network
     let network = match args.network.as_str() {
         "mainnet" => hayate::wallet::plutus::Network::Mainnet,
         "testnet" => hayate::wallet::plutus::Network::Testnet,
         _ => anyhow::bail!("Invalid network: {}. Use 'mainnet' or 'testnet'", args.network),
     };
 
-    let council_addr = hayate::wallet::plutus::script_address(&council_script_bytes, network)
-        .map_err(|e| anyhow::anyhow!("Failed to calculate council address: {}", e))?;
-    let ta_addr = hayate::wallet::plutus::script_address(&ta_script_bytes, network)
-        .map_err(|e| anyhow::anyhow!("Failed to calculate TA address: {}", e))?;
-
-    eprintln!("📍 Contract addresses:");
-    eprintln!("  Council:  {}", hex::encode(&council_addr));
-    eprintln!("  TA:       {}", hex::encode(&ta_addr));
-    eprintln!();
-
-    // 4. Build datums
-    eprintln!("🔨 Building contract datums...");
-    let council_datum = build_governance_datum(&council_members)?;
-    let ta_datum = build_governance_datum(&ta_members)?;
-
-    eprintln!("  Council datum:  {} bytes", council_datum.len());
-    eprintln!("  TA datum:       {} bytes", ta_datum.len());
-    eprintln!();
-
-    // 5. Generate temporary keys for NFT minting
-    eprintln!("🔑 Generating temporary keys for NFT minting...");
-    let (council_mint_key, council_mint_vkey_hash) = generate_ed25519_keypair()?;
-    let (ta_mint_key, ta_mint_vkey_hash) = generate_ed25519_keypair()?;
-
-    // Create minting policies
-    let council_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(council_mint_vkey_hash);
-    let ta_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(ta_mint_vkey_hash);
-
-    let council_policy_id = council_mint_policy.policy_id()
-        .map_err(|e| anyhow::anyhow!("Failed to calculate council NFT policy ID: {}", e))?;
-    let ta_policy_id = ta_mint_policy.policy_id()
-        .map_err(|e| anyhow::anyhow!("Failed to calculate TA NFT policy ID: {}", e))?;
-
-    eprintln!("  Council NFT policy:  {}", hex::encode(council_policy_id));
-    eprintln!("  TA NFT policy:       {}", hex::encode(ta_policy_id));
-    eprintln!();
-
-    // 6. Load wallet mnemonic
+    // 4. Load wallet mnemonic
     eprintln!("🔑 Loading Cardano wallet mnemonic...");
     let mnemonic = load_wallet_mnemonic(&args)?;
 
@@ -1366,7 +1329,84 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         );
     }
 
-    // 9. Build and submit transactions
+    // 9. Generate temporary keys for NFT minting
+    eprintln!("🔑 Generating NFT minting policies...");
+    let (council_mint_key, council_mint_vkey_hash) = generate_ed25519_keypair()?;
+    let (ta_mint_key, ta_mint_vkey_hash) = generate_ed25519_keypair()?;
+
+    // Create minting policies
+    let council_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(council_mint_vkey_hash);
+    let ta_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(ta_mint_vkey_hash);
+
+    let council_policy_id = council_mint_policy.policy_id()
+        .map_err(|e| anyhow::anyhow!("Failed to calculate council NFT policy ID: {}", e))?;
+    let ta_policy_id = ta_mint_policy.policy_id()
+        .map_err(|e| anyhow::anyhow!("Failed to calculate TA NFT policy ID: {}", e))?;
+
+    eprintln!("  Council NFT policy:  {}", hex::encode(council_policy_id));
+    eprintln!("  TA NFT policy:       {}", hex::encode(ta_policy_id));
+    eprintln!();
+
+    // 10. Apply parameters to contracts
+    eprintln!("🔧 Applying parameters to governance contracts...");
+
+    // Select first UTxO to use as reference parameter
+    let ref_utxo = &wallet_utxos[0];
+    let mut ref_tx_hash = [0u8; 32];
+    ref_tx_hash.copy_from_slice(&ref_utxo.tx_hash);
+    let ref_output_index = ref_utxo.output_index as u64;
+
+    eprintln!("  Reference UTxO:  {}#{}", hex::encode(&ref_tx_hash), ref_output_index);
+
+    // Apply parameters to council contract: (nft_policy_id, initial_utxo_ref)
+    let council_script_hex = hex::encode(&council_script_bytes);
+    let council_params = vec![
+        crate::contracts::params::bytearray_data(&council_policy_id),
+        crate::contracts::params::output_reference_data(ref_tx_hash, ref_output_index),
+    ];
+    let council_parameterized_hex = crate::contracts::params::apply_params(&council_script_hex, council_params)
+        .context("Failed to apply parameters to council contract")?;
+    let council_parameterized_bytes = hex::decode(&council_parameterized_hex)
+        .context("Failed to decode parameterized council contract")?;
+
+    // Apply parameters to TA contract: (nft_policy_id, initial_utxo_ref)
+    let ta_script_hex = hex::encode(&ta_script_bytes);
+    let ta_params = vec![
+        crate::contracts::params::bytearray_data(&ta_policy_id),
+        crate::contracts::params::output_reference_data(ref_tx_hash, ref_output_index),
+    ];
+    let ta_parameterized_hex = crate::contracts::params::apply_params(&ta_script_hex, ta_params)
+        .context("Failed to apply parameters to TA contract")?;
+    let ta_parameterized_bytes = hex::decode(&ta_parameterized_hex)
+        .context("Failed to decode parameterized TA contract")?;
+
+    eprintln!("  Council contract:  {} bytes (unparameterized) → {} bytes (parameterized)",
+        council_script_bytes.len(), council_parameterized_bytes.len());
+    eprintln!("  TA contract:       {} bytes (unparameterized) → {} bytes (parameterized)",
+        ta_script_bytes.len(), ta_parameterized_bytes.len());
+    eprintln!();
+
+    // 11. Calculate script addresses from parameterized contracts
+    eprintln!("📍 Calculating contract addresses...");
+    let council_addr = hayate::wallet::plutus::script_address(&council_parameterized_bytes, network)
+        .map_err(|e| anyhow::anyhow!("Failed to calculate council address: {}", e))?;
+    let ta_addr = hayate::wallet::plutus::script_address(&ta_parameterized_bytes, network)
+        .map_err(|e| anyhow::anyhow!("Failed to calculate TA address: {}", e))?;
+
+    eprintln!("  Council:  {}", hex::encode(&council_addr));
+    eprintln!("  TA:       {}", hex::encode(&ta_addr));
+    eprintln!();
+
+    // 12. Build datums
+    eprintln!("🔨 Building contract datums...");
+    let council_datum = build_governance_datum(&council_members)?;
+    let ta_datum = build_governance_datum(&ta_members)?;
+
+    eprintln!("  Council datum:  {} bytes", council_datum.len());
+    eprintln!("  TA datum:       {} bytes", ta_datum.len());
+    eprintln!();
+
+    // 13. Build and submit transactions
     eprintln!("🏗️  Building deployment transactions...");
     eprintln!();
 
