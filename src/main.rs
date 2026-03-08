@@ -5,6 +5,7 @@ use std::io;
 
 mod application;
 mod cli;
+mod contracts;
 mod crypto;
 mod domain;
 mod storage;

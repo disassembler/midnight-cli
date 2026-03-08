@@ -6,6 +6,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::contracts::params;
+
 #[derive(Subcommand)]
 pub enum GenesisCommands {
     /// Initialize genesis configuration from aggregated keys
@@ -16,6 +18,16 @@ pub enum GenesisCommands {
     ExportNetwork(ExportNetworkArgs),
     /// Deploy governance contracts to Cardano
     DeployContracts(DeployContractsArgs),
+    /// Extract a single contract from plutus.json to .plutus file
+    ExtractContract(ExtractContractArgs),
+    /// Extract all contracts from plutus.json to individual files
+    ExtractContracts(ExtractContractsArgs),
+    /// Apply parameters to a Plutus contract
+    ApplyParams(ApplyParamsArgs),
+    /// Sign deployment transactions offline (air-gap machine)
+    SignDeployment(SignDeploymentArgs),
+    /// Submit signed deployment transactions to network
+    SubmitDeployment(SubmitDeploymentArgs),
 }
 
 #[derive(Args)]
@@ -176,6 +188,98 @@ pub struct DeployContractsArgs {
     /// Path to file containing mnemonic (supports GPG encrypted .asc/.gpg files)
     #[arg(long)]
     pub mnemonic_file: Option<PathBuf>,
+
+    /// Air-gap mode: create unsigned transactions without signing or submitting
+    /// (for offline signing workflow)
+    #[arg(long)]
+    pub air_gap: bool,
+
+    /// Directory for air-gap transaction files (unsigned txs, signing payloads, metadata)
+    #[arg(long, default_value = "deployment-airgap")]
+    pub airgap_dir: PathBuf,
+}
+
+#[derive(Args)]
+pub struct ExtractContractArgs {
+    /// Path to plutus.json file from Aiken build
+    #[arg(long)]
+    pub plutus_json: PathBuf,
+
+    /// Validator title to extract (e.g., "council_governance.council_governance.spend")
+    #[arg(long)]
+    pub validator: String,
+
+    /// Output file for extracted contract (.plutus)
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct ExtractContractsArgs {
+    /// Path to plutus.json file from Aiken build
+    #[arg(long)]
+    pub plutus_json: PathBuf,
+
+    /// Output directory for extracted contracts
+    #[arg(long, default_value = "contracts")]
+    pub output_dir: PathBuf,
+
+    /// Only extract spending validators (not minting policies)
+    #[arg(long)]
+    pub spending_only: bool,
+
+    /// Only extract minting policies (not spending validators)
+    #[arg(long)]
+    pub minting_only: bool,
+}
+
+#[derive(Args)]
+pub struct ApplyParamsArgs {
+    /// Path to Plutus contract file (.plutus)
+    #[arg(long)]
+    pub contract: PathBuf,
+
+    /// UTxO reference for one-shot NFT (format: tx_hash#index)
+    #[arg(long)]
+    pub utxo_ref: Option<String>,
+
+    /// Output file for parameterized contract
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct SignDeploymentArgs {
+    /// Directory containing unsigned transactions from deploy-contracts --air-gap
+    #[arg(long)]
+    pub airgap_dir: PathBuf,
+
+    /// Cardano wallet mnemonic (24 words) - use with caution
+    #[arg(long, conflicts_with = "mnemonic_file")]
+    pub mnemonic: Option<String>,
+
+    /// Path to file containing mnemonic (supports GPG encrypted .asc/.gpg files)
+    #[arg(long)]
+    pub mnemonic_file: Option<PathBuf>,
+
+    /// Account index within the wallet
+    #[arg(long, default_value = "0")]
+    pub account: u32,
+}
+
+#[derive(Args)]
+pub struct SubmitDeploymentArgs {
+    /// Directory containing signed transactions from sign-deployment
+    #[arg(long)]
+    pub airgap_dir: PathBuf,
+
+    /// UTxORPC endpoint for submitting transactions
+    #[arg(long, default_value = "http://localhost:50051")]
+    pub utxorpc: String,
+
+    /// Output file for deployment information (addresses, policy IDs, tx hashes)
+    #[arg(long, default_value = "deployment-info.json")]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -275,6 +379,11 @@ pub async fn handle_genesis_command(cmd: GenesisCommands) -> Result<()> {
         GenesisCommands::Cnight(args) => handle_cnight_genesis(args),
         GenesisCommands::ExportNetwork(args) => handle_export_network(args),
         GenesisCommands::DeployContracts(args) => handle_deploy_contracts(args).await,
+        GenesisCommands::ExtractContract(args) => handle_extract_contract(args),
+        GenesisCommands::ExtractContracts(args) => handle_extract_contracts(args),
+        GenesisCommands::ApplyParams(args) => handle_apply_params(args),
+        GenesisCommands::SignDeployment(args) => handle_sign_deployment(args),
+        GenesisCommands::SubmitDeployment(args) => handle_submit_deployment(args).await,
     }
 }
 
@@ -1608,6 +1717,280 @@ fn load_governance_members(member_files: &[PathBuf]) -> Result<Vec<hayate::walle
     Ok(members)
 }
 
+
+/// Extract a single contract from plutus.json
+fn handle_extract_contract(args: ExtractContractArgs) -> Result<()> {
+    eprintln!("📖 Extracting contract from plutus.json");
+    eprintln!();
+
+    // Read plutus.json
+    let plutus_json = fs::read_to_string(&args.plutus_json)
+        .with_context(|| format!("Failed to read plutus.json: {}", args.plutus_json.display()))?;
+
+    let json: serde_json::Value = serde_json::from_str(&plutus_json)
+        .context("Failed to parse plutus.json")?;
+
+    // Find the validator
+    let validators = json["validators"].as_array()
+        .ok_or_else(|| anyhow::anyhow!("No validators array in plutus.json"))?;
+
+    let mut found = None;
+    for validator in validators {
+        if validator["title"].as_str() == Some(&args.validator) {
+            found = Some(validator);
+            break;
+        }
+    }
+
+    let validator = found.ok_or_else(|| anyhow::anyhow!(
+        "Validator '{}' not found in plutus.json. Available validators:\n{}",
+        args.validator,
+        validators.iter()
+            .filter_map(|v| v["title"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))?;
+
+    // Get compiledCode (hex CBOR)
+    let compiled_code = validator["compiledCode"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("No compiledCode in validator"))?;
+
+    // Decode hex to bytes
+    let contract_bytes = hex::decode(compiled_code)
+        .context("Failed to decode contract hex")?;
+
+    // Write to output file
+    fs::write(&args.output, &contract_bytes)
+        .with_context(|| format!("Failed to write contract: {}", args.output.display()))?;
+
+    let hash = validator["hash"].as_str().unwrap_or("unknown");
+    eprintln!("✓ Extracted contract");
+    eprintln!("  Validator:    {}", args.validator);
+    eprintln!("  Hash:         {}", hash);
+    eprintln!("  Size:         {} bytes", contract_bytes.len());
+    eprintln!("  Output:       {}", args.output.display());
+
+    Ok(())
+}
+
+/// Extract all contracts from plutus.json
+fn handle_extract_contracts(args: ExtractContractsArgs) -> Result<()> {
+    eprintln!("📖 Extracting all contracts from plutus.json");
+    eprintln!();
+
+    // Create output directory
+    fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("Failed to create output directory: {}", args.output_dir.display()))?;
+
+    // Read plutus.json
+    let plutus_json = fs::read_to_string(&args.plutus_json)
+        .with_context(|| format!("Failed to read plutus.json: {}", args.plutus_json.display()))?;
+
+    let json: serde_json::Value = serde_json::from_str(&plutus_json)
+        .context("Failed to parse plutus.json")?;
+
+    let validators = json["validators"].as_array()
+        .ok_or_else(|| anyhow::anyhow!("No validators array in plutus.json"))?;
+
+    let mut extracted = 0;
+    for validator in validators {
+        let title = validator["title"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("Validator missing title"))?;
+
+        // Skip based on filters
+        let is_spending = title.contains(".spend");
+        let is_minting = title.contains(".mint");
+
+        if args.spending_only && !is_spending {
+            continue;
+        }
+        if args.minting_only && !is_minting {
+            continue;
+        }
+
+        // Get compiledCode
+        let compiled_code = validator["compiledCode"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("No compiledCode in validator {}", title))?;
+
+        let contract_bytes = hex::decode(compiled_code)
+            .with_context(|| format!("Failed to decode contract hex for {}", title))?;
+
+        // Generate filename from title (replace dots with underscores, remove ".else" suffix)
+        let filename = title
+            .replace(".", "_")
+            .replace("_else", "")
+            + ".plutus";
+
+        let output_path = args.output_dir.join(&filename);
+
+        fs::write(&output_path, &contract_bytes)
+            .with_context(|| format!("Failed to write {}", output_path.display()))?;
+
+        let hash = validator["hash"].as_str().unwrap_or("unknown");
+        eprintln!("✓ {}", title);
+        eprintln!("  → {} ({} bytes, hash: {})", filename, contract_bytes.len(), &hash[..16]);
+
+        extracted += 1;
+    }
+
+    eprintln!();
+    eprintln!("✓ Extracted {} contracts to {}", extracted, args.output_dir.display());
+
+    Ok(())
+}
+
+/// Apply parameters to a Plutus contract
+fn handle_apply_params(args: ApplyParamsArgs) -> Result<()> {
+    eprintln!("🔧 Applying parameters to Plutus contract");
+    eprintln!();
+
+    // Read contract file
+    let contract_bytes = fs::read(&args.contract)
+        .with_context(|| format!("Failed to read contract: {}", args.contract.display()))?;
+
+    let contract_hex = hex::encode(&contract_bytes);
+
+    eprintln!("  Input contract:  {}", args.contract.display());
+    eprintln!("  Contract size:   {} bytes", contract_bytes.len());
+
+    // Build parameters based on what's provided
+    let mut params_data = Vec::new();
+
+    if let Some(ref utxo_ref) = args.utxo_ref {
+        eprintln!("  Parameter:       UTxO reference = {}", utxo_ref);
+
+        // Parse UTxO reference
+        let parts: Vec<&str> = utxo_ref.split('#').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid UTxO reference format. Expected: tx_hash#index");
+        }
+
+        let tx_hash_hex = parts[0].trim_start_matches("0x");
+        let tx_hash_bytes = hex::decode(tx_hash_hex)
+            .context("Invalid tx_hash hex")?;
+
+        if tx_hash_bytes.len() != 32 {
+            anyhow::bail!("tx_hash must be 32 bytes, got {}", tx_hash_bytes.len());
+        }
+
+        let mut tx_hash = [0u8; 32];
+        tx_hash.copy_from_slice(&tx_hash_bytes);
+
+        let output_index = parts[1].parse::<u64>()
+            .context("Invalid output index")?;
+
+        let param = params::output_reference_data(tx_hash, output_index);
+        params_data.push(param);
+    }
+
+    if params_data.is_empty() {
+        anyhow::bail!("No parameters provided. Use --utxo-ref for one-shot NFT policies");
+    }
+
+    // Apply parameters
+    let parameterized_hex = params::apply_params(&contract_hex, params_data)?;
+    let parameterized_bytes = hex::decode(&parameterized_hex)
+        .context("Failed to decode parameterized contract")?;
+
+    // Write output
+    fs::write(&args.output, &parameterized_bytes)
+        .with_context(|| format!("Failed to write output: {}", args.output.display()))?;
+
+    eprintln!();
+    eprintln!("✓ Contract parameterized");
+    eprintln!("  Output size:     {} bytes", parameterized_bytes.len());
+    eprintln!("  Output file:     {}", args.output.display());
+
+    Ok(())
+}
+
+/// Sign deployment transactions offline (air-gap machine)
+fn handle_sign_deployment(args: SignDeploymentArgs) -> Result<()> {
+    eprintln!("🔐 Signing deployment transactions (air-gap mode)");
+    eprintln!();
+
+    // Check airgap directory exists
+    if !args.airgap_dir.exists() {
+        anyhow::bail!(
+            "Air-gap directory not found: {}\n\
+            Run 'deploy-contracts --air-gap' first to create unsigned transactions",
+            args.airgap_dir.display()
+        );
+    }
+
+    // Load deployment plan
+    let plan_path = args.airgap_dir.join("deployment-plan.json");
+    if !plan_path.exists() {
+        anyhow::bail!(
+            "deployment-plan.json not found in {}\n\
+            This directory may not contain valid air-gap deployment files",
+            args.airgap_dir.display()
+        );
+    }
+
+    eprintln!("  Air-gap directory: {}", args.airgap_dir.display());
+    eprintln!();
+
+    // TODO: Implement actual signing
+    // 1. Load unsigned transaction bodies (.txbody files)
+    // 2. Load signing payloads (.payload files)
+    // 3. Derive wallet keys from mnemonic
+    // 4. Sign each payload
+    // 5. Create witness sets (.witness files)
+    // 6. Assemble signed transactions (.txsigned files)
+
+    anyhow::bail!(
+        "Air-gap signing not yet fully implemented.\n\
+        \n\
+        This feature is under development. For now, use online mode:\n\
+        \n\
+        midnight-cli genesis deploy-contracts \\\n\
+          --mnemonic-file ~/.cardano/wallet.mnemonic \\\n\
+          --utxorpc http://localhost:50051 \\\n\
+          (other arguments...)\n\
+        \n\
+        Air-gap workflow coming soon!"
+    )
+}
+
+/// Submit signed deployment transactions
+async fn handle_submit_deployment(args: SubmitDeploymentArgs) -> Result<()> {
+    eprintln!("📡 Submitting signed deployment transactions");
+    eprintln!();
+
+    // Check airgap directory exists
+    if !args.airgap_dir.exists() {
+        anyhow::bail!(
+            "Air-gap directory not found: {}\n\
+            Run 'sign-deployment' first to create signed transactions",
+            args.airgap_dir.display()
+        );
+    }
+
+    eprintln!("  Air-gap directory: {}", args.airgap_dir.display());
+    eprintln!("  UTxORPC endpoint:  {}", args.utxorpc);
+    eprintln!();
+
+    // TODO: Implement actual submission
+    // 1. Load signed transactions (.txsigned files)
+    // 2. Submit to network via UTxORPC
+    // 3. Wait for confirmations
+    // 4. Extract tx hashes and deployment info
+    // 5. Save deployment-info.json
+
+    anyhow::bail!(
+        "Air-gap submission not yet fully implemented.\n\
+        \n\
+        This feature is under development. For now, use online mode:\n\
+        \n\
+        midnight-cli genesis deploy-contracts \\\n\
+          --mnemonic-file ~/.cardano/wallet.mnemonic \\\n\
+          --utxorpc http://localhost:50051 \\\n\
+          (other arguments...)\n\
+        \n\
+        Air-gap workflow coming soon!"
+    )
+}
 
 /// Calculate 2/3 threshold (rounds up)
 /// Matches the Aiken validator's calculate_threshold function: (2 * total + 2) / 3
