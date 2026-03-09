@@ -1281,36 +1281,38 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         args.account,
     ).map_err(|e| anyhow::anyhow!("Failed to create wallet: {}", e))?;
 
-    let payment_addr = wallet.payment_address(0)
-        .map_err(|e| anyhow::anyhow!("Failed to derive payment address: {}", e))?;
+    // Derive both base address (with staking) and enterprise address (without staking)
+    let base_addr = wallet.payment_address(0)
+        .map_err(|e| anyhow::anyhow!("Failed to derive base address: {}", e))?;
+    let base_addr_bytes = wallet.payment_address_bytes(0)
+        .map_err(|e| anyhow::anyhow!("Failed to get base address bytes: {}", e))?;
 
-    eprintln!("  Wallet account:    {}", args.account);
-    eprintln!("  Payment address:   {}", payment_addr);
+    let (enterprise_addr, enterprise_addr_bytes) = derive_enterprise_address(&wallet, 0)?;
+
+    eprintln!("  Wallet account:       {}", args.account);
+    eprintln!("  Base address (0/0):   {}", base_addr);
+    eprintln!("  Enterprise (0/0):     {}", enterprise_addr);
     eprintln!();
 
-    // 7. Query wallet UTxOs
+    // 7. Query wallet UTxOs from both addresses
     eprintln!("🔍 Querying wallet UTxOs...");
     eprintln!("  Connecting to:  {}", args.utxorpc);
 
-    let payment_addr_bytes = wallet.payment_address_bytes(0)
-        .map_err(|e| anyhow::anyhow!("Failed to get payment address bytes: {}", e))?;
+    // Connect to UTxORPC and query UTxOs (already in async context, no need for new runtime)
+    let mut utxorpc_client = hayate::wallet::utxorpc_client::WalletUtxorpcClient::connect(args.utxorpc.clone()).await?;
 
-    // Create async runtime for UTxORPC calls
-    let runtime = tokio::runtime::Runtime::new()?;
-
-    let mut utxorpc_client = runtime.block_on(async {
-        hayate::wallet::utxorpc_client::WalletUtxorpcClient::connect(args.utxorpc.clone()).await
-    })?;
-
-    let wallet_utxos = runtime.block_on(async {
-        utxorpc_client.query_utxos(vec![payment_addr_bytes.clone()]).await
-    })?;
+    // Query both addresses
+    let addresses_to_query = vec![base_addr_bytes.clone(), enterprise_addr_bytes.clone()];
+    let wallet_utxos = utxorpc_client.query_utxos(addresses_to_query).await?;
 
     if wallet_utxos.is_empty() {
         anyhow::bail!(
-            "No UTxOs found at wallet address: {}\n\
-            Please fund this address with ADA before deploying contracts.",
-            payment_addr
+            "No UTxOs found at wallet addresses:\n\
+            Base:       {}\n\
+            Enterprise: {}\n\
+            Please fund one of these addresses with ADA before deploying contracts.",
+            base_addr,
+            enterprise_addr
         );
     }
 
@@ -1413,7 +1415,6 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     // Build Council contract deployment
     eprintln!("📝 Council Contract Deployment:");
     let council_tx_hash = build_and_submit_deployment_tx(
-        &runtime,
         &mut utxorpc_client,
         &wallet,
         &wallet_utxos,
@@ -1426,21 +1427,18 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         args.contract_amount,
         args.fee,
         hayate_network,
-        &payment_addr_bytes,
-    )?;
+        &enterprise_addr_bytes,  // Use enterprise address for change
+    ).await?;
 
     eprintln!("  ✅ Council deployment submitted: {}", hex::encode(&council_tx_hash));
     eprintln!();
 
-    // Refresh UTxOs after first transaction
-    let wallet_utxos = runtime.block_on(async {
-        utxorpc_client.query_utxos(vec![payment_addr_bytes.clone()]).await
-    })?;
+    // Refresh UTxOs after first transaction (query both addresses)
+    let wallet_utxos = utxorpc_client.query_utxos(vec![base_addr_bytes.clone(), enterprise_addr_bytes.clone()]).await?;
 
     // Build TA contract deployment
     eprintln!("📝 TA Contract Deployment:");
     let ta_tx_hash = build_and_submit_deployment_tx(
-        &runtime,
         &mut utxorpc_client,
         &wallet,
         &wallet_utxos,
@@ -1453,8 +1451,8 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
         args.contract_amount,
         args.fee,
         hayate_network,
-        &payment_addr_bytes,
-    )?;
+        &enterprise_addr_bytes,  // Use enterprise address for change
+    ).await?;
 
     eprintln!("  ✅ TA deployment submitted: {}", hex::encode(&ta_tx_hash));
     eprintln!();
@@ -1552,11 +1550,10 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
 
 /// Build and submit a contract deployment transaction
 #[allow(clippy::too_many_arguments)]
-fn build_and_submit_deployment_tx(
-    runtime: &tokio::runtime::Runtime,
+async fn build_and_submit_deployment_tx(
     utxorpc_client: &mut hayate::wallet::utxorpc_client::WalletUtxorpcClient,
     wallet: &hayate::wallet::Wallet,
-    wallet_utxos: &[hayate::wallet::utxorpc_client::UtxoData],
+    _wallet_utxos: &[hayate::wallet::utxorpc_client::UtxoData],
     contract_addr: &[u8],
     datum_bytes: &[u8],
     mint_policy: &hayate::wallet::plutus::TempKeyMintPolicy,
@@ -1564,39 +1561,76 @@ fn build_and_submit_deployment_tx(
     policy_id: [u8; 28],
     asset_name: Vec<u8>,
     contract_amount: u64,
-    fee: u64,
+    _fee: u64,  // Not used - automatic fee calculation
     network: hayate::wallet::Network,
     change_addr: &[u8],
 ) -> Result<Vec<u8>> {
-    use hayate::wallet::tx_builder::PlutusTransactionBuilder;
+    use hayate::wallet::unified_tx::UnifiedTxBuilder;
     use hayate::wallet::plutus::DatumOption;
+    use hayate::wallet::utxorpc_client::AssetData;
+    use std::sync::Arc;
 
-    // Select UTxOs for funding (simple greedy selection)
-    let required = contract_amount + fee + 2_000_000; // amount + fee + buffer
-    let mut selected_utxos = Vec::new();
-    let mut selected_amount = 0u64;
+    eprintln!("  🚀 Using UnifiedTxBuilder for fee calculation");
 
-    for utxo in wallet_utxos {
-        if utxo.assets.is_empty() { // Only use pure ADA UTxOs
-            selected_utxos.push(utxo.clone());
-            selected_amount += utxo.lovelace();
-            if selected_amount >= required {
-                break;
-            }
-        }
-    }
+    // Build native script CBOR for minting
+    let native_script_cbor = mint_policy.to_native_script()
+        .map_err(|e| anyhow::anyhow!("Failed to build native script: {}", e))?;
 
-    if selected_amount < required {
-        anyhow::bail!(
-            "Insufficient funds for transaction. Required: {} lovelace, Available: {} lovelace",
-            required,
-            selected_amount
-        );
-    }
+    // Create UnifiedTxBuilder for fee estimation
+    let wallet_arc = Arc::new(wallet.clone());
+    let mut fee_builder = UnifiedTxBuilder::with_client(wallet_arc, utxorpc_client.clone());
 
-    eprintln!("  Selected {} UTxO(s) ({} lovelace)", selected_utxos.len(), selected_amount);
+    // Query UTxOs
+    eprintln!("    📡 Querying wallet UTxOs...");
+    fee_builder.query_utxos().await?;
 
-    // Build transaction
+    // Query protocol parameters
+    eprintln!("    📋 Querying protocol parameters...");
+    fee_builder.query_protocol_params().await?;
+
+    // Add operations to estimate fee
+    fee_builder.mint_with_native_script(
+        native_script_cbor.clone(),
+        policy_id,
+        asset_name.clone(),
+        1,
+    )?;
+
+    let nft_asset = AssetData {
+        policy_id: policy_id.to_vec(),
+        asset_name: asset_name.clone(),
+        amount: 1,
+    };
+
+    fee_builder.pay_to_script_with_assets(
+        contract_addr.to_vec(),
+        contract_amount,
+        vec![nft_asset.clone()],
+        DatumOption::Inline(datum_bytes.to_vec()),
+        None,
+    )?;
+
+    // Build to get fee and selected UTxOs
+    eprintln!("    🔨 Calculating fee (automatic)...");
+    let built_tx = fee_builder.build().await?;
+
+    eprintln!("    ✅ Transaction parameters:");
+    eprintln!("       Estimated size: {} bytes", built_tx.tx_bytes.len());
+    eprintln!("       Calculated fee: {} lovelace ({}.{:02} ADA)",
+        built_tx.fee_paid,
+        built_tx.fee_paid / 1_000_000,
+        (built_tx.fee_paid % 1_000_000) / 10_000
+    );
+    eprintln!("       Inputs needed:  {}", built_tx.inputs_used.len());
+    eprintln!("       Change:         {} lovelace", built_tx.change_amount);
+
+    // Now build with PlutusTransactionBuilder using the calculated fee
+    eprintln!("    🔨 Building final transaction...");
+
+    use hayate::wallet::tx_builder::PlutusTransactionBuilder;
+    use hayate::wallet::tx_builder::PlutusInput;
+    use hayate::wallet::tx_builder::PlutusOutput;
+
     let mut builder = PlutusTransactionBuilder::new(
         match network {
             hayate::wallet::Network::Mainnet => hayate::wallet::plutus::Network::Mainnet,
@@ -1605,77 +1639,119 @@ fn build_and_submit_deployment_tx(
         change_addr.to_vec(),
     );
 
-    // Add wallet UTxO inputs
-    use hayate::wallet::tx_builder::PlutusInput;
-    for utxo in &selected_utxos {
+    // Add selected inputs
+    for utxo in &built_tx.inputs_used {
         builder.add_input(&PlutusInput::regular(utxo.clone()))?;
     }
 
     // Mint NFT
     builder.mint_asset(policy_id, asset_name.clone(), 1)?;
-    let native_script = mint_policy.to_native_script()
-        .map_err(|e| anyhow::anyhow!("Failed to build native script: {}", e))?;
-    builder.add_native_script(native_script)?;
+    builder.add_native_script(native_script_cbor)?;
 
     // Add contract output with NFT and inline datum
-    use hayate::wallet::tx_builder::PlutusOutput;
-    use hayate::wallet::utxorpc_client::AssetData;
     let mut contract_output = PlutusOutput::new(
         contract_addr.to_vec(),
         contract_amount,
     );
     contract_output.datum = Some(DatumOption::Inline(datum_bytes.to_vec()));
-    contract_output.assets.push(AssetData {
-        policy_id: policy_id.to_vec(),
-        asset_name: asset_name.clone(),
-        amount: 1,
-    });
+    contract_output.assets.push(nft_asset);
     builder.add_output(&contract_output)?;
 
-    // Add change output
-    let change_amount = selected_amount - contract_amount - fee;
-    if change_amount > 1_000_000 { // Only add change if > 1 ADA
-        let change_output = PlutusOutput::new(change_addr.to_vec(), change_amount);
+    // Add change output if needed
+    if built_tx.change_amount > 1_000_000 {
+        let change_output = PlutusOutput::new(change_addr.to_vec(), built_tx.change_amount);
         builder.add_output(&change_output)?;
     }
 
-    // Set transaction parameters
-    builder.set_fee(fee);
+    // Set calculated fee
+    builder.set_fee(built_tx.fee_paid);
     builder.set_network_id();
 
     // Get signing keys
-    // 1. Wallet payment key for spending inputs
-    let wallet_signing_key = wallet.payment_signing_key(0)
-        .map_err(|e| anyhow::anyhow!("Failed to get wallet signing key: {}", e))?;
+    let mut signing_keys = Vec::new();
 
-    // 2. Temporary mint key for native script
-    let mint_signing_key = hayate::wallet::ed25519_secret_to_privatekey(mint_secret_key)
-        .map_err(|e| anyhow::anyhow!("Failed to convert mint key: {}", e))?;
+    // Wallet keys for inputs
+    use std::collections::HashSet;
+    let mut used_indices = HashSet::new();
 
-    let signing_keys = vec![wallet_signing_key, mint_signing_key];
+    for utxo in &built_tx.inputs_used {
+        for i in 0..20 {
+            let payment_addr = wallet.payment_address_bytes(i)?;
+            if utxo.address == payment_addr {
+                used_indices.insert(i);
+                break;
+            }
+            let enterprise_addr = wallet.enterprise_address_bytes(i)?;
+            if utxo.address == enterprise_addr {
+                used_indices.insert(i);
+                break;
+            }
+        }
+    }
 
-    eprintln!("  Signing transaction...");
+    for &index in &used_indices {
+        let key = wallet.payment_signing_key(index)?;
+        signing_keys.push(key);
+    }
 
-    // Build and sign the transaction
-    let signed_tx_bytes = builder.build_and_sign(signing_keys)
-        .map_err(|e| anyhow::anyhow!("Failed to build and sign transaction: {}", e))?;
+    // Add mint key
+    let mint_signing_key = hayate::wallet::ed25519_secret_to_privatekey(mint_secret_key)?;
+    signing_keys.push(mint_signing_key);
 
-    eprintln!("  Signed transaction: {} bytes", signed_tx_bytes.len());
+    eprintln!("    ✍️  Signing with {} key(s)...", signing_keys.len());
 
-    // Calculate transaction hash before submitting (for reference)
+    // Build and sign
+    let signed_tx_bytes = builder.build_and_sign(signing_keys)?;
+
+    eprintln!("       Signed: {} bytes", signed_tx_bytes.len());
+
+    // Calculate hash
     use pallas_crypto::hash::Hasher;
     let tx_hash = Hasher::<256>::hash(&signed_tx_bytes);
     let tx_hash_bytes = tx_hash.as_ref().to_vec();
 
-    // Submit transaction
-    eprintln!("  Submitting to network...");
-    runtime.block_on(async {
-        utxorpc_client.submit_transaction(signed_tx_bytes).await
-    })?;
+    // Submit
+    eprintln!("    📤 Submitting to network...");
+    utxorpc_client.submit_transaction(signed_tx_bytes).await?;
 
-    eprintln!("  Transaction submitted: {}", hex::encode(&tx_hash_bytes));
+    eprintln!("    ✅ Submitted: {}", hex::encode(&tx_hash_bytes));
 
     Ok(tx_hash_bytes)
+}
+
+/// Derive enterprise address (payment only, no staking)
+/// Uses pallas like hayate but with Null delegation part
+fn derive_enterprise_address(wallet: &hayate::wallet::Wallet, address_index: u32) -> Result<(String, Vec<u8>)> {
+    use pallas_addresses::{Address, ShelleyAddress, ShelleyPaymentPart, ShelleyDelegationPart};
+    use pallas_crypto::hash::Hasher;
+
+    // Derive payment key at m/1852'/1815'/account'/0/address_index
+    let payment_key = wallet.payment_key(address_index)
+        .map_err(|e| anyhow::anyhow!("Failed to derive payment key: {}", e))?;
+
+    let payment_pub = payment_key.public();
+
+    // Blake2b-224 hash (same as hayate's approach)
+    let payment_hash = Hasher::<224>::hash(payment_pub.as_ref());
+
+    // Create enterprise address (payment only, no staking delegation)
+    let network = match wallet.network() {
+        hayate::wallet::Network::Mainnet => pallas_addresses::Network::Mainnet,
+        hayate::wallet::Network::Testnet => pallas_addresses::Network::Testnet,
+    };
+
+    let addr = ShelleyAddress::new(
+        network,
+        ShelleyPaymentPart::Key(payment_hash),
+        ShelleyDelegationPart::Null, // Enterprise address has no stake component
+    );
+
+    let bech32 = Address::Shelley(addr.clone()).to_bech32()
+        .map_err(|e| anyhow::anyhow!("Failed to encode enterprise address: {}", e))?;
+
+    let bytes = Address::Shelley(addr).to_vec();
+
+    Ok((bech32, bytes))
 }
 
 /// Generate a temporary Ed25519 keypair for NFT minting
