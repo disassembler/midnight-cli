@@ -919,8 +919,8 @@ async fn build_and_sign_rotation_tx(
         datum: Some(contract_utxo.datum.clone()),
     };
 
-    // 5. Create script input
-    let script_input = PlutusInput::script(
+    // 5. Create script input (not used - TODO: integrate with UnifiedTxBuilder)
+    let _script_input = PlutusInput::script(
         contract_utxo_data.clone(),
         script.clone(),
         redeemer.clone(),
@@ -979,7 +979,8 @@ async fn build_and_sign_rotation_tx(
     // 9. Extract required signer key hashes (28 bytes each)
     // Only add required signers for the council members who are actually signing
     // (not all council members, just the ones providing signatures for this rotation)
-    let required_signers: Vec<[u8; 28]> = members.iter()
+    // TODO: Add required_signers when PlutusTransactionBuilder supports it
+    let _required_signers: Vec<[u8; 28]> = members.iter()
         .take(council_mnemonics.len()) // Only the first N members that match signing mnemonics
         .map(|m| m.cardano_hash)
         .collect();

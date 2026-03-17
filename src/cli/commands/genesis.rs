@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::contracts::params;
-use hayate::wallet::plutus::address::{script_address, script_hash};
 use hayate::wallet::plutus::oneshot::TempKeyMintPolicy;
 
 #[derive(Subcommand)]
@@ -1392,9 +1391,17 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
 
     // 11. Calculate script addresses from parameterized contracts
     eprintln!("📍 Calculating contract addresses...");
-    let council_addr = script_address(&council_parameterized_bytes, network)
+
+    // Use PlutusScript to calculate addresses (preferred over deprecated script_address)
+    use hayate::wallet::plutus::PlutusScript;
+    let council_script = PlutusScript::v2_from_cbor(council_parameterized_bytes.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse council script: {}", e))?;
+    let ta_script = PlutusScript::v2_from_cbor(ta_parameterized_bytes.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse TA script: {}", e))?;
+
+    let council_addr = council_script.address(network)
         .map_err(|e| anyhow::anyhow!("Failed to calculate council address: {}", e))?;
-    let ta_addr = script_address(&ta_parameterized_bytes, network)
+    let ta_addr = ta_script.address(network)
         .map_err(|e| anyhow::anyhow!("Failed to calculate TA address: {}", e))?;
 
     eprintln!("  Council:  {}", hex::encode(&council_addr));
@@ -1465,7 +1472,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     let deployment_info = DeploymentInfo {
         network: args.network.clone(),
         council_contract: DeployedContract {
-            script_hash: hex::encode(script_hash(&council_script_bytes)),
+            script_hash: hex::encode(council_script.hash()),
             address: hex::encode(&council_addr),
             nft_policy_id: hex::encode(council_policy_id),
             nft_asset_name: hex::encode(b"CouncilNFT"),
@@ -1475,7 +1482,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
             threshold: council_threshold,
         },
         ta_contract: DeployedContract {
-            script_hash: hex::encode(script_hash(&ta_script_bytes)),
+            script_hash: hex::encode(ta_script.hash()),
             address: hex::encode(&ta_addr),
             nft_policy_id: hex::encode(ta_policy_id),
             nft_asset_name: hex::encode(b"TAgovNFT"),

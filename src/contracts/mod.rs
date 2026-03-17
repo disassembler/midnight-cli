@@ -7,8 +7,12 @@ pub mod governance;
 pub mod nft;
 pub mod params;
 
+// Re-exports for external use (may not be used internally)
+#[allow(unused_imports)]
 pub use governance::{COUNCIL_GOVERNANCE_CBOR, TECH_AUTH_GOVERNANCE_CBOR, FEDERATED_OPS_GOVERNANCE_CBOR};
+#[allow(unused_imports)]
 pub use nft::ONE_SHOT_NFT_CBOR;
+#[allow(unused_imports)]
 pub use params::{
     apply_params,
     output_reference_data,
