@@ -1,8 +1,9 @@
+use aiken/builtin
 use aiken/collection/dict
 use aiken/collection/list
 use cardano/address.{Script}
 use cardano/assets.{tokens}
-use cardano/transaction.{Input, OutputReference, Transaction}
+use cardano/transaction.{InlineDatum, Input, OutputReference, Transaction}
 
 // Types
 pub type CardanoKeyHash =
@@ -13,7 +14,9 @@ pub type Sr25519Key =
 
 pub type Multisig {
   total_signers: Int,
-  signers: List<(CardanoKeyHash, Sr25519Key)>,
+  // List of (CBOR-encoded wrapped key hash, sr25519 key) pairs
+  // Wrapped keys are encoded as: [0, bytes(28)] = 8200581c<28 bytes>
+  signers: List<(ByteArray, Sr25519Key)>,
 }
 
 pub type VersionedMultisig {
@@ -39,7 +42,10 @@ fn count_signatures(tx: Transaction, multisig: Multisig) -> Int {
     multisig.signers,
     0,
     fn(pair, count) {
-      let (hash, _sr25519_key) = pair
+      let (wrapped_key_cbor, _sr25519_key) = pair
+      // wrapped_key_cbor is CBOR-encoded: 8200581c<28 bytes>
+      // Skip first 4 bytes (82=array, 00=int(0), 581c=bytes(28)) to get the hash
+      let hash = builtin.slice_bytearray(4, 32, wrapped_key_cbor)
       if signed_by(tx, hash) {
         count + 1
       } else {
@@ -96,6 +102,30 @@ fn has_governance_nft_output(
   list.length(outputs_with_nft) == 1
 }
 
+fn get_output_datum(
+  tx: Transaction,
+  policy_id: ByteArray,
+  script_hash: ByteArray,
+) -> VersionedMultisig {
+  // Find the output with the NFT going to the script
+  expect Some(output) =
+    list.find(
+      tx.outputs,
+      fn(output) {
+        when output.address.payment_credential is {
+          Script(hash) ->
+            hash == script_hash && has_governance_nft(output.value, policy_id)
+          _ -> False
+        }
+      },
+    )
+
+  // Extract inline datum
+  expect InlineDatum(d) = output.datum
+  expect new_datum: VersionedMultisig = d
+  new_datum
+}
+
 // Validator
 validator council_governance(
   nft_policy_id: ByteArray,
@@ -117,6 +147,10 @@ validator council_governance(
     expect has_governance_nft_input(tx, nft_policy_id, own_ref)
     expect has_governance_nft_output(tx, nft_policy_id, own_script_hash)
     expect check_threshold(tx, datum.data)
+
+    // Verify output datum has logic_round incremented by exactly 1
+    let new_datum = get_output_datum(tx, nft_policy_id, own_script_hash)
+    expect new_datum.logic_round == datum.logic_round + 1
 
     True
   }

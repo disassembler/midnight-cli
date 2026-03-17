@@ -62,22 +62,6 @@ fn has_governance_nft(value, policy_id: ByteArray) -> Bool {
   dict.size(token_dict) > 0
 }
 
-fn has_governance_nft_input(
-  tx: Transaction,
-  policy_id: ByteArray,
-  expected_ref: OutputReference,
-) -> Bool {
-  list.any(
-    tx.inputs,
-    fn(input: Input) {
-      input.output_reference == expected_ref && has_governance_nft(
-        input.output.value,
-        policy_id,
-      )
-    },
-  )
-}
-
 fn has_governance_nft_output(
   tx: Transaction,
   policy_id: ByteArray,
@@ -98,17 +82,19 @@ fn has_governance_nft_output(
   list.length(outputs_with_nft) == 1
 }
 
-// Find governance datum from reference inputs by script hash
-fn find_governance_datum(
+// Find governance input and datum by script hash and policy ID
+fn find_governance_input(
   inputs: List<Input>,
   script_hash: ByteArray,
-) -> Option<Multisig> {
+  policy_id: ByteArray,
+) -> Option<(VersionedMultisig, OutputReference)> {
   let matching_inputs =
     list.filter(
       inputs,
       fn(input) {
         when input.output.address.payment_credential is {
-          Script(hash) -> hash == script_hash
+          Script(hash) ->
+            hash == script_hash && has_governance_nft(input.output.value, policy_id)
           _ -> False
         }
       },
@@ -119,7 +105,7 @@ fn find_governance_datum(
       when input.output.datum is {
         InlineDatum(d) -> {
           expect datum: VersionedMultisig = d
-          Some(datum.data)
+          Some((datum, input.output_reference))
         }
         _ -> None
       }
@@ -127,11 +113,45 @@ fn find_governance_datum(
   }
 }
 
+// Verify that the governance contract output increments logic_round by 1
+fn verify_logic_round_increment(
+  tx: Transaction,
+  script_hash: ByteArray,
+  policy_id: ByteArray,
+  old_logic_round: Int,
+) -> Bool {
+  let outputs_with_nft =
+    list.filter(
+      tx.outputs,
+      fn(output) {
+        when output.address.payment_credential is {
+          Script(hash) ->
+            hash == script_hash && has_governance_nft(output.value, policy_id)
+          _ -> False
+        }
+      },
+    )
+
+  when outputs_with_nft is {
+    [output] ->
+      when output.datum is {
+        InlineDatum(d) -> {
+          expect new_datum: VersionedMultisig = d
+          new_datum.logic_round == old_logic_round + 1
+        }
+        _ -> False
+      }
+    _ -> False
+  }
+}
+
 // Validator
 validator federated_ops_governance(
   nft_policy_id: ByteArray,
   council_script_hash: ByteArray,
+  council_nft_policy_id: ByteArray,
   tech_auth_script_hash: ByteArray,
+  tech_auth_nft_policy_id: ByteArray,
   _initial_utxo_ref: OutputReference,
 ) {
   spend(
@@ -148,19 +168,35 @@ validator federated_ops_governance(
     expect Script(own_script_hash) = own_input.output.address.payment_credential
 
     // Verify NFT is being spent and returned
-    expect has_governance_nft_input(tx, nft_policy_id, own_ref)
+    expect has_governance_nft(own_input.output.value, nft_policy_id)
     expect has_governance_nft_output(tx, nft_policy_id, own_script_hash)
 
-    // Find council and TA datums via reference inputs
-    expect Some(council_multisig) =
-      find_governance_datum(tx.reference_inputs, council_script_hash)
+    // Find and verify council input is being spent
+    expect Some((council_datum, _council_ref)) =
+      find_governance_input(tx.inputs, council_script_hash, council_nft_policy_id)
 
-    expect Some(tech_auth_multisig) =
-      find_governance_datum(tx.reference_inputs, tech_auth_script_hash)
+    // Find and verify TA input is being spent
+    expect Some((tech_auth_datum, _ta_ref)) =
+      find_governance_input(tx.inputs, tech_auth_script_hash, tech_auth_nft_policy_id)
+
+    // Verify both council and TA outputs increment logic_round by 1
+    expect verify_logic_round_increment(
+      tx,
+      council_script_hash,
+      council_nft_policy_id,
+      council_datum.logic_round,
+    )
+
+    expect verify_logic_round_increment(
+      tx,
+      tech_auth_script_hash,
+      tech_auth_nft_policy_id,
+      tech_auth_datum.logic_round,
+    )
 
     // Check 2/3 threshold from BOTH bodies
-    expect check_threshold(tx, council_multisig)
-    expect check_threshold(tx, tech_auth_multisig)
+    expect check_threshold(tx, council_datum.data)
+    expect check_threshold(tx, tech_auth_datum.data)
 
     True
   }
