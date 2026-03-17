@@ -8,6 +8,12 @@ result
 *.skey
 *.vkey
 *.asc
+*-key.json
+governance-key.json
+
+# Compiled Plutus contracts (generated from validators/*.ak)
+validators/*.plutus
+validators/*.hex
 
 # Test data and payloads
 test_data/
@@ -19,6 +25,7 @@ test-*.txt
 # Backup files
 *.bak
 *.backup
+*~
 
 # JavaScript test files (if any remain)
 *.js

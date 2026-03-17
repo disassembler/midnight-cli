@@ -44,15 +44,11 @@
         installShellFiles
       ];
 
-      # Link hayate and cardano-lsm from flake inputs as path dependencies
+      # Link hayate from flake input as path dependency
       preConfigure = ''
         mkdir -p ../hayate
         cp -r ${inputs.hayate}/* ../hayate/
         chmod -R +w ../hayate
-
-        mkdir -p ../cardano-lsm-rust
-        cp -r ${inputs.hayate.inputs.cardano-lsm}/* ../cardano-lsm-rust/
-        chmod -R +w ../cardano-lsm-rust
       '';
 
       meta = {
