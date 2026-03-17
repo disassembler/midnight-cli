@@ -6,6 +6,7 @@ pub mod contracts;
 pub mod crypto;
 pub mod domain;
 pub mod storage;
+pub mod types;
 pub mod utxorpc;
 
 // Re-export commonly used items

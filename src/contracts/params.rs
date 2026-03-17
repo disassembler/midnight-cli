@@ -191,6 +191,7 @@ pub fn bytearray_data(bytes: &[u8]) -> pallas_primitives::PlutusData {
 /// Create OutputReference as CBOR-encoded bytes (legacy method)
 ///
 /// This is kept for compatibility but `output_reference_data` + `apply_params` is preferred.
+#[allow(dead_code)]
 pub fn output_reference_cbor(tx_hash: [u8; 32], output_index: u64) -> Result<Vec<u8>> {
     let data = output_reference_data(tx_hash, output_index);
     pallas_codec::minicbor::to_vec(&data)
@@ -200,6 +201,7 @@ pub fn output_reference_cbor(tx_hash: [u8; 32], output_index: u64) -> Result<Vec
 /// Create ByteArray as CBOR-encoded bytes (legacy method)
 ///
 /// This is kept for compatibility but `bytearray_data` + `apply_params` is preferred.
+#[allow(dead_code)]
 pub fn bytearray_cbor(bytes: &[u8]) -> Result<Vec<u8>> {
     let data = bytearray_data(bytes);
     pallas_codec::minicbor::to_vec(&data)
@@ -211,6 +213,7 @@ pub fn bytearray_cbor(bytes: &[u8]) -> Result<Vec<u8>> {
 /// This is used to calculate:
 /// - Policy ID from minting policy CBOR
 /// - Script address from validator CBOR
+#[allow(dead_code)]
 pub fn script_hash(script_cbor_hex: &str) -> Result<[u8; 28]> {
     use pallas_crypto::hash::{Hash, Hasher};
 
