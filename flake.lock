@@ -200,11 +200,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1773709624,
-        "narHash": "sha256-JQ1gldoFRuhGwdPGbXiXA9S/MKe1YS8DW5XdJa7M1oQ=",
+        "lastModified": 1773720019,
+        "narHash": "sha256-pztyTDPO/KO1+6yuD/sq6ihmtm9gzeJA+J+n6NgaPLM=",
         "owner": "disassembler",
         "repo": "hayate",
-        "rev": "e58a71e34ecea3c82ed42a1146cbacb8b415058a",
+        "rev": "1577385b5f4a85ee95e1d962b1215e0fb4cf6841",
         "type": "github"
       },
       "original": {

@@ -25,7 +25,6 @@
         ../Cargo.toml
         ../build.rs
         ../src
-        # Note: proto files now come from hayate flake input
       ];
     };
 
@@ -44,7 +43,7 @@
         installShellFiles
       ];
 
-      # Link hayate from flake input as path dependency
+      # Link hayate from flake input as a git dependency override
       preConfigure = ''
         mkdir -p ../hayate
         cp -r ${inputs.hayate}/* ../hayate/

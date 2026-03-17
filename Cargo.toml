@@ -25,8 +25,8 @@ tonic = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 
-# Hayate for Plutus transaction building (path dependency, linked via Nix flake)
-hayate = { path = "../hayate", default-features = false }
+# Hayate for Plutus transaction building (git dependency, linked via Nix flake)
+hayate = { git = "https://github.com/disassembler/hayate", default-features = false }
 
 # Pallas for Cardano operations
 pallas-crypto = "0.35"
