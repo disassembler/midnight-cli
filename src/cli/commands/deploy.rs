@@ -21,8 +21,8 @@ pub enum DeployCommands {
 
 #[derive(Args)]
 pub struct DeployGovernanceArgs {
-    /// Governance member JSON files (comma-separated)
-    #[arg(long, value_delimiter = ',')]
+    /// Governance member JSON file (can be specified multiple times)
+    #[arg(long = "member")]
     pub member_files: Vec<PathBuf>,
 
     /// Initial UTxO reference for one-shot NFT minting (tx_hash#index)

@@ -28,7 +28,9 @@ This guide walks through deploying and managing Midnight governance contracts wi
 
 ```bash
 midnight-cli deploy council-governance \
-  --member-files council-1.json,council-2.json,council-3.json \
+  --member council-1.json \
+  --member council-2.json \
+  --member council-3.json \
   --initial-utxo-ref <tx_hash>#<output_index> \
   --hayate-endpoint http://localhost:50051 \
   --mnemonic-file wallet.mnemonic \
@@ -36,7 +38,7 @@ midnight-cli deploy council-governance \
 ```
 
 **Parameters:**
-- `--member-files`: Comma-separated list of governance member JSON files
+- `--member`: Governance member JSON file (can be specified multiple times)
 - `--initial-utxo-ref`: UTxO to consume for one-shot NFT (format: `tx_hash#index`)
 - `--hayate-endpoint`: Hayate gRPC endpoint (default: http://localhost:50051)
 - `--mnemonic-file`: Wallet mnemonic for transaction fees
@@ -124,7 +126,9 @@ On the **online machine** with access to hayate:
 ```bash
 midnight-cli rotate council \
   --state-file council-governance.state.json \
-  --new-member-files new-council-1.json,new-council-2.json,new-council-3.json \
+  --member new-council-1.json \
+  --member new-council-2.json \
+  --member new-council-3.json \
   --hayate-endpoint http://localhost:50051 \
   --mnemonic-file wallet.mnemonic \
   --output-dir ./rotation \
@@ -192,7 +196,8 @@ Assemble the signed transaction:
 midnight-cli witness assemble \
   --tx-body-file council-rotation.txbody \
   --metadata-file council-rotation.metadata \
-  --witness-files member-1.witness,member-2.witness \
+  --witness member-1.witness \
+  --witness member-2.witness \
   --output council-rotation.tx \
   --validate-threshold
 ```
@@ -241,7 +246,9 @@ cardano-cli debug transaction view \
 ### TA Governance
 ```bash
 midnight-cli deploy ta-governance \
-  --member-files ta-1.json,ta-2.json,ta-3.json \
+  --member ta-1.json \
+  --member ta-2.json \
+  --member ta-3.json \
   --initial-utxo-ref <tx_hash>#<index> \
   --hayate-endpoint http://localhost:50051 \
   --mnemonic-file wallet.mnemonic \
@@ -251,7 +258,9 @@ midnight-cli deploy ta-governance \
 ### FedOps Governance
 ```bash
 midnight-cli deploy fedops-governance \
-  --member-files fedops-1.json,fedops-2.json,fedops-3.json \
+  --validator fedops-1.json \
+  --validator fedops-2.json \
+  --validator fedops-3.json \
   --initial-utxo-ref <tx_hash>#<index> \
   --hayate-endpoint http://localhost:50051 \
   --mnemonic-file wallet.mnemonic \

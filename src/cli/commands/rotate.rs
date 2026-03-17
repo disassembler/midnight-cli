@@ -25,8 +25,8 @@ pub struct RotateArgs {
     #[arg(long)]
     pub state_file: PathBuf,
 
-    /// New member JSON files (comma-separated)
-    #[arg(long, value_delimiter = ',')]
+    /// New member JSON file (can be specified multiple times)
+    #[arg(long = "member")]
     pub new_member_files: Vec<PathBuf>,
 
     /// Hayate gRPC endpoint
@@ -64,9 +64,9 @@ pub struct RotateFedopsArgs {
     #[arg(long)]
     pub ta_state_file: PathBuf,
 
-    /// New validator keys JSON file
-    #[arg(long)]
-    pub new_validator_keys: PathBuf,
+    /// Validator keys JSON file (can be specified multiple times)
+    #[arg(long = "validator")]
+    pub new_validator_keys: Vec<PathBuf>,
 
     /// Hayate gRPC endpoint
     #[arg(long, default_value = "http://localhost:50051")]
@@ -205,9 +205,11 @@ async fn handle_rotate_fedops(_args: RotateFedopsArgs) -> Result<()> {
     eprintln!("    --fedops-state-file fedops-governance.state.json \\");
     eprintln!("    --council-state-file council-governance.state.json \\");
     eprintln!("    --ta-state-file ta-governance.state.json \\");
-    eprintln!("    --new-validator-keys fedops-validators.json \\");
+    eprintln!("    --validator fedops-validator-1.json \\");
+    eprintln!("    --validator fedops-validator-2.json \\");
+    eprintln!("    --validator fedops-validator-3.json \\");
     eprintln!("    --hayate-endpoint http://localhost:50051 \\");
-    eprintln!("    --mnemonic-file validator.mnemonic \\");
+    eprintln!("    --mnemonic-file wallet.mnemonic \\");
     eprintln!("    --output-dir ./rotation \\");
     eprintln!("    --air-gap");
 

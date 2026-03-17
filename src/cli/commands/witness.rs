@@ -150,8 +150,8 @@ pub struct AssembleArgs {
     #[arg(long)]
     pub metadata_file: PathBuf,
 
-    /// Comma-separated list of witness files
-    #[arg(long, value_delimiter = ',')]
+    /// Witness file (can be specified multiple times)
+    #[arg(long = "witness")]
     pub witness_files: Vec<PathBuf>,
 
     /// Output file for signed transaction (.tx)
