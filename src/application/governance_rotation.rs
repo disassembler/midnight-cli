@@ -12,8 +12,11 @@ use std::path::Path;
 
 /// Arguments for building a Council rotation transaction
 pub struct CouncilRotationArgs<'a> {
-    /// Current contract state
-    pub current_state: &'a crate::application::governance_deployment::DeploymentState,
+    /// Contract address (bech32)
+    pub contract_address: String,
+
+    /// NFT policy ID (hex)
+    pub nft_policy_id: String,
 
     /// New members
     pub new_members: &'a [GovernanceMember],
@@ -130,20 +133,6 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
         anyhow::bail!("Cannot rotate to zero members");
     }
 
-    eprintln!("Current members: {}", args.current_state.members.len());
-    eprintln!("New members: {}", args.new_members.len());
-
-    // Get current members as GovernanceMember
-    let current_members = args.current_state.get_members()?;
-
-    // Calculate threshold from CURRENT members
-    let current_total = current_members.len() as u32;
-    let threshold = SignaturesNeeded::calculate_threshold(current_total);
-
-    eprintln!("\nSignature requirements (from CURRENT members):");
-    eprintln!("  Total signers: {}", current_total);
-    eprintln!("  Threshold: {}", threshold);
-
     // Create wallet for fees
     let wallet = Arc::new(Wallet::from_mnemonic_str(
         args.wallet_mnemonic,
@@ -155,16 +144,16 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
     let mut client = WalletUtxorpcClient::connect(args.hayate_endpoint.clone()).await?;
 
     // Query contract UTxO
-    eprintln!("\nQuerying contract UTxO...");
-    let contract_addr_bytes = Address::from_bech32(&args.current_state.contract_address)?.to_vec();
+    eprintln!("Querying contract UTxO...");
+    let contract_addr_bytes = Address::from_bech32(&args.contract_address)?.to_vec();
     let contract_utxos = client.query_utxos(vec![contract_addr_bytes.clone()]).await?;
 
     if contract_utxos.is_empty() {
-        anyhow::bail!("No UTxO found at contract address: {}", args.current_state.contract_address);
+        anyhow::bail!("No UTxO found at contract address: {}", args.contract_address);
     }
 
     // Find UTxO with the governance NFT
-    let nft_policy = hex::decode(&args.current_state.nft_policy_id)?;
+    let nft_policy = hex::decode(&args.nft_policy_id)?;
     let contract_utxo = contract_utxos.iter()
         .find(|u| {
             u.assets.iter().any(|asset| {
@@ -176,6 +165,24 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
 
     eprintln!("  Found contract UTxO: {}#{}", hex::encode(&contract_utxo.tx_hash), contract_utxo.output_index);
     eprintln!("  Value: {} lovelace", contract_utxo.coin);
+
+    // Decode on-chain datum to get current state
+    eprintln!("\nDecoding on-chain datum...");
+    let datum_bytes = contract_utxo.datum.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Contract UTxO has no datum"))?;
+    let current_datum = VersionedMultisig::from_cbor(datum_bytes)?;
+
+    eprintln!("  Current logic round: {}", current_datum.logic_round);
+    eprintln!("  Current members: {}", current_datum.members.len());
+    eprintln!("  New members: {}", args.new_members.len());
+
+    // Calculate threshold from CURRENT members (on-chain)
+    let current_total = current_datum.total_signers;
+    let threshold = SignaturesNeeded::calculate_threshold(current_total);
+
+    eprintln!("\nSignature requirements (from on-chain state):");
+    eprintln!("  Total signers: {}", current_total);
+    eprintln!("  Threshold: {}", threshold);
 
     // Query wallet UTxOs for collateral
     eprintln!("\nQuerying wallet UTxOs...");
@@ -196,8 +203,8 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
         .ok_or_else(|| anyhow::anyhow!("No suitable collateral UTxO (need 5 ADA pure UTxO)"))?
         .clone();
 
-    // Create new datum
-    let new_logic_round = args.current_state.logic_round + 1;
+    // Create new datum (increment logic_round for anti-replay)
+    let new_logic_round = current_datum.logic_round + 1;
     let new_datum = VersionedMultisig {
         total_signers: args.new_members.len() as u32,
         members: args.new_members.to_vec(),
@@ -206,7 +213,7 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
     let new_datum_cbor = new_datum.to_cbor()?;
 
     eprintln!("\nNew datum:");
-    eprintln!("  Logic round: {} → {}", args.current_state.logic_round, new_logic_round);
+    eprintln!("  Logic round: {} → {}", current_datum.logic_round, new_logic_round);
     eprintln!("  Datum CBOR: {} bytes", new_datum_cbor.len());
 
     // Build redeemer
@@ -275,8 +282,8 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
         let hash_result = hasher.finalize();
         let tx_hash = &hash_result[..32];
 
-        // Extract required signers
-        let required_signers: Vec<SignerInfo> = current_members.iter()
+        // Extract required signers from on-chain datum
+        let required_signers: Vec<SignerInfo> = current_datum.members.iter()
             .enumerate()
             .map(|(i, member)| SignerInfo {
                 cardano_key_hash: hex::encode(&member.cardano_hash),
@@ -293,11 +300,11 @@ pub async fn build_council_rotation_tx(args: CouncilRotationArgs<'_>) -> Result<
             required_signers,
             signatures_needed: SignaturesNeeded::new(current_total),
             proposal_details: ProposalDetails {
-                current_logic_round: args.current_state.logic_round,
+                current_logic_round: current_datum.logic_round,
                 new_logic_round,
                 description: Some("Council member rotation".to_string()),
-                contract_address: Some(args.current_state.contract_address.clone()),
-                nft_policy_id: Some(args.current_state.nft_policy_id.clone()),
+                contract_address: Some(args.contract_address.clone()),
+                nft_policy_id: Some(args.nft_policy_id.clone()),
             },
         };
 

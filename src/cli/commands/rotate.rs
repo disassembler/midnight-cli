@@ -105,11 +105,12 @@ async fn handle_rotate_council(args: RotateArgs) -> Result<()> {
 
     eprintln!("Council governance rotation\n");
 
-    // Load deployment state
+    // Load deployment state (for contract address + NFT policy ID)
     eprintln!("Loading deployment state...");
     let state = DeploymentState::read_from_file(&args.state_file)?;
-    eprintln!("  Current logic round: {}", state.logic_round);
-    eprintln!("  Current members: {}", state.members.len());
+    eprintln!("  Contract address: {}", state.contract_address);
+    eprintln!("  NFT policy ID: {}", state.nft_policy_id);
+    eprintln!("\nNote: Current members and logic_round will be queried from blockchain");
 
     // Load new member files
     eprintln!("\nLoading new member files...");
@@ -149,9 +150,10 @@ async fn handle_rotate_council(args: RotateArgs) -> Result<()> {
     let wallet_mnemonic = KeyReader::read_mnemonic_from_file(&args.mnemonic_file)?;
     let wallet_mnemonic_str = secrecy::ExposeSecret::expose_secret(&wallet_mnemonic);
 
-    // Build rotation transaction
+    // Build rotation transaction (queries current state from blockchain)
     let rotation_args = CouncilRotationArgs {
-        current_state: &state,
+        contract_address: state.contract_address.clone(),
+        nft_policy_id: state.nft_policy_id.clone(),
         new_members: &new_members,
         hayate_endpoint: args.hayate_endpoint.clone(),
         wallet_mnemonic: wallet_mnemonic_str,
