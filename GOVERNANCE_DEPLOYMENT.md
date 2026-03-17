@@ -31,7 +31,7 @@ midnight-cli deploy council-governance \
   --member-files council-1.json,council-2.json,council-3.json \
   --initial-utxo-ref <tx_hash>#<output_index> \
   --hayate-endpoint http://localhost:50051 \
-  --mnemonic-file validator.mnemonic \
+  --mnemonic-file wallet.mnemonic \
   --output-dir ./deployment
 ```
 
@@ -126,7 +126,7 @@ midnight-cli rotate council \
   --state-file council-governance.state.json \
   --new-member-files new-council-1.json,new-council-2.json,new-council-3.json \
   --hayate-endpoint http://localhost:50051 \
-  --mnemonic-file validator.mnemonic \
+  --mnemonic-file wallet.mnemonic \
   --output-dir ./rotation \
   --air-gap
 ```
@@ -244,7 +244,7 @@ midnight-cli deploy ta-governance \
   --member-files ta-1.json,ta-2.json,ta-3.json \
   --initial-utxo-ref <tx_hash>#<index> \
   --hayate-endpoint http://localhost:50051 \
-  --mnemonic-file validator.mnemonic \
+  --mnemonic-file wallet.mnemonic \
   --output-dir ./deployment
 ```
 
@@ -254,7 +254,7 @@ midnight-cli deploy fedops-governance \
   --member-files fedops-1.json,fedops-2.json,fedops-3.json \
   --initial-utxo-ref <tx_hash>#<index> \
   --hayate-endpoint http://localhost:50051 \
-  --mnemonic-file validator.mnemonic \
+  --mnemonic-file wallet.mnemonic \
   --output-dir ./deployment
 ```
 
