@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
         Commands::Key(key_cmd) => handle_key_command(key_cmd),
         Commands::Witness(witness_cmd) => handle_witness_command(witness_cmd),
         Commands::Validator(validator_cmd) => handle_validator_command(validator_cmd),
-        Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd),
+        Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd).await,
         Commands::Genesis(genesis_cmd) => handle_genesis_command(genesis_cmd).await,
         Commands::Mnemonic(mnemonic_cmd) => handle_mnemonic_command(mnemonic_cmd),
         Commands::Tx(tx_cmd) => handle_tx_command(tx_cmd).await,

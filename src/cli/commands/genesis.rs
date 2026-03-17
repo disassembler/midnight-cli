@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::contracts::params;
+use hayate::wallet::plutus::address::{script_address, script_hash};
+use hayate::wallet::plutus::oneshot::TempKeyMintPolicy;
 
 #[derive(Subcommand)]
 pub enum GenesisCommands {
@@ -1337,8 +1339,8 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     let (ta_mint_key, ta_mint_vkey_hash) = generate_ed25519_keypair()?;
 
     // Create minting policies
-    let council_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(council_mint_vkey_hash);
-    let ta_mint_policy = hayate::wallet::plutus::TempKeyMintPolicy::new(ta_mint_vkey_hash);
+    let council_mint_policy = TempKeyMintPolicy::new(council_mint_vkey_hash);
+    let ta_mint_policy = TempKeyMintPolicy::new(ta_mint_vkey_hash);
 
     let council_policy_id = council_mint_policy.policy_id()
         .map_err(|e| anyhow::anyhow!("Failed to calculate council NFT policy ID: {}", e))?;
@@ -1390,9 +1392,9 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
 
     // 11. Calculate script addresses from parameterized contracts
     eprintln!("📍 Calculating contract addresses...");
-    let council_addr = hayate::wallet::plutus::script_address(&council_parameterized_bytes, network)
+    let council_addr = script_address(&council_parameterized_bytes, network)
         .map_err(|e| anyhow::anyhow!("Failed to calculate council address: {}", e))?;
-    let ta_addr = hayate::wallet::plutus::script_address(&ta_parameterized_bytes, network)
+    let ta_addr = script_address(&ta_parameterized_bytes, network)
         .map_err(|e| anyhow::anyhow!("Failed to calculate TA address: {}", e))?;
 
     eprintln!("  Council:  {}", hex::encode(&council_addr));
@@ -1463,7 +1465,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
     let deployment_info = DeploymentInfo {
         network: args.network.clone(),
         council_contract: DeployedContract {
-            script_hash: hex::encode(hayate::wallet::plutus::script_hash(&council_script_bytes)),
+            script_hash: hex::encode(script_hash(&council_script_bytes)),
             address: hex::encode(&council_addr),
             nft_policy_id: hex::encode(council_policy_id),
             nft_asset_name: hex::encode(b"CouncilNFT"),
@@ -1473,7 +1475,7 @@ async fn handle_deploy_contracts(args: DeployContractsArgs) -> Result<()> {
             threshold: council_threshold,
         },
         ta_contract: DeployedContract {
-            script_hash: hex::encode(hayate::wallet::plutus::script_hash(&ta_script_bytes)),
+            script_hash: hex::encode(script_hash(&ta_script_bytes)),
             address: hex::encode(&ta_addr),
             nft_policy_id: hex::encode(ta_policy_id),
             nft_asset_name: hex::encode(b"TAgovNFT"),
@@ -1556,7 +1558,7 @@ async fn build_and_submit_deployment_tx(
     _wallet_utxos: &[hayate::wallet::utxorpc_client::UtxoData],
     contract_addr: &[u8],
     datum_bytes: &[u8],
-    mint_policy: &hayate::wallet::plutus::TempKeyMintPolicy,
+    mint_policy: &TempKeyMintPolicy,
     mint_secret_key: &[u8],
     policy_id: [u8; 28],
     asset_name: Vec<u8>,
@@ -1694,8 +1696,8 @@ async fn build_and_submit_deployment_tx(
         signing_keys.push(key);
     }
 
-    // Add mint key
-    let mint_signing_key = hayate::wallet::ed25519_secret_to_privatekey(mint_secret_key)?;
+    // Add mint key (convert 32-byte secret to 64-byte SecretKeyExtended)
+    let mint_signing_key = hayate::wallet::ed25519_secret_to_extended_privatekey(mint_secret_key)?;
     signing_keys.push(mint_signing_key);
 
     eprintln!("    ✍️  Signing with {} key(s)...", signing_keys.len());
@@ -1757,8 +1759,8 @@ fn derive_enterprise_address(wallet: &hayate::wallet::Wallet, address_index: u32
 /// Generate a temporary Ed25519 keypair for NFT minting
 /// Returns (secret_key, vkey_hash)
 fn generate_ed25519_keypair() -> Result<(Vec<u8>, [u8; 28])> {
-    use sha2::{Sha256, Digest};
     use sp_core::crypto::Pair;
+    use pallas_crypto::hash::Hasher;
 
     // Generate random 32 bytes for Ed25519 secret key
     let mut secret_key = [0u8; 32];
@@ -1770,13 +1772,11 @@ fn generate_ed25519_keypair() -> Result<(Vec<u8>, [u8; 28])> {
     let public_key = keypair.public();
     let public_bytes: &[u8] = public_key.as_ref();
 
-    // Calculate vkey hash: SHA256 then take first 28 bytes
-    let mut hasher = Sha256::new();
-    hasher.update(public_bytes);
-    let hash = hasher.finalize();
+    // Calculate vkey hash: BLAKE2b-224 (Cardano standard)
+    let hash: pallas_crypto::hash::Hash<28> = Hasher::<224>::hash(public_bytes);
 
     let mut vkey_hash = [0u8; 28];
-    vkey_hash.copy_from_slice(&hash[..28]);
+    vkey_hash.copy_from_slice(hash.as_ref());
 
     Ok((secret_key.to_vec(), vkey_hash))
 }
