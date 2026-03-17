@@ -12,11 +12,12 @@ mod storage;
 mod utxorpc;
 
 use cli::{
-    handle_key_command, handle_witness_command, handle_validator_command,
-    handle_governance_command, handle_genesis_command, handle_mnemonic_command,
-    handle_tx_command, handle_query_command, handle_debug_command, KeyCommands, WitnessCommands,
-    ValidatorCommands, GovernanceCommands, GenesisCommands, MnemonicCommands,
-    TxCommands, QueryArgs, DebugArgs,
+    handle_debug_command, handle_deploy_command, handle_genesis_command,
+    handle_governance_command, handle_key_command, handle_mnemonic_command,
+    handle_query_command, handle_rotate_command, handle_tx_command,
+    handle_validator_command, handle_witness_command, DebugArgs, DeployCommands,
+    GenesisCommands, GovernanceCommands, KeyCommands, MnemonicCommands, QueryArgs,
+    RotateCommands, TxCommands, ValidatorCommands, WitnessCommands,
 };
 
 #[derive(Parser)]
@@ -45,6 +46,14 @@ enum Commands {
     /// Governance key operations
     #[command(subcommand)]
     Governance(GovernanceCommands),
+
+    /// Deploy governance contracts
+    #[command(subcommand)]
+    Deploy(DeployCommands),
+
+    /// Rotate governance members
+    #[command(subcommand)]
+    Rotate(RotateCommands),
 
     /// Genesis configuration operations
     #[command(subcommand)]
@@ -81,6 +90,8 @@ async fn main() -> Result<()> {
         Commands::Witness(witness_cmd) => handle_witness_command(witness_cmd),
         Commands::Validator(validator_cmd) => handle_validator_command(validator_cmd),
         Commands::Governance(governance_cmd) => handle_governance_command(governance_cmd).await,
+        Commands::Deploy(deploy_cmd) => handle_deploy_command(deploy_cmd).await,
+        Commands::Rotate(rotate_cmd) => handle_rotate_command(rotate_cmd).await,
         Commands::Genesis(genesis_cmd) => handle_genesis_command(genesis_cmd).await,
         Commands::Mnemonic(mnemonic_cmd) => handle_mnemonic_command(mnemonic_cmd),
         Commands::Tx(tx_cmd) => handle_tx_command(tx_cmd).await,

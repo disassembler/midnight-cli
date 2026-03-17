@@ -14,6 +14,10 @@ pub enum WitnessCommands {
     CreateExtrinsic(CreateExtrinsicArgs),
     /// Verify a witness against a payload
     Verify(VerifyArgs),
+    /// Create a Cardano witness for an unsigned transaction body (air-gap signing)
+    CreateCardano(CreateCardanoArgs),
+    /// Assemble multiple Cardano witnesses into a signed transaction
+    Assemble(AssembleArgs),
 }
 
 #[derive(Args)]
@@ -113,11 +117,59 @@ pub struct VerifyArgs {
     pub payload: PathBuf,
 }
 
+#[derive(Args)]
+pub struct CreateCardanoArgs {
+    /// Path to unsigned transaction body file (.txbody)
+    #[arg(long)]
+    pub tx_body_file: PathBuf,
+
+    /// Path to transaction metadata file (.metadata)
+    #[arg(long)]
+    pub metadata_file: PathBuf,
+
+    /// Mnemonic file path (supports .mnemonic, .mnemonic.gpg, or any GPG-encrypted file)
+    #[arg(long)]
+    pub mnemonic_file: PathBuf,
+
+    /// Cardano account index
+    #[arg(long, default_value = "0")]
+    pub account: u32,
+
+    /// Output file for witness (.witness)
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct AssembleArgs {
+    /// Path to unsigned transaction body file (.txbody)
+    #[arg(long)]
+    pub tx_body_file: PathBuf,
+
+    /// Path to transaction metadata file (.metadata)
+    #[arg(long)]
+    pub metadata_file: PathBuf,
+
+    /// Comma-separated list of witness files
+    #[arg(long, value_delimiter = ',')]
+    pub witness_files: Vec<PathBuf>,
+
+    /// Output file for signed transaction (.tx)
+    #[arg(long)]
+    pub output: PathBuf,
+
+    /// Validate that threshold is met (fail if insufficient signatures)
+    #[arg(long)]
+    pub validate_threshold: bool,
+}
+
 pub fn handle_witness_command(cmd: WitnessCommands) -> Result<()> {
     match cmd {
         WitnessCommands::Create(args) => handle_create(args),
         WitnessCommands::CreateExtrinsic(args) => handle_create_extrinsic(args),
         WitnessCommands::Verify(args) => handle_verify(args),
+        WitnessCommands::CreateCardano(args) => handle_create_cardano(args),
+        WitnessCommands::Assemble(args) => handle_assemble(args),
     }
 }
 
@@ -351,6 +403,120 @@ fn handle_verify(args: VerifyArgs) -> Result<()> {
         println!("  Signature does not match payload");
         std::process::exit(1);
     }
+
+    Ok(())
+}
+
+fn handle_create_cardano(args: CreateCardanoArgs) -> Result<()> {
+    use crate::application::{create_cardano_witness};
+    use crate::storage::{TextEnvelope, TransactionMetadata};
+
+    eprintln!("Creating Cardano witness for air-gapped transaction...\n");
+
+    // 1. Load transaction body
+    eprintln!("Loading transaction body: {}", args.tx_body_file.display());
+    let tx_body_envelope = TextEnvelope::read_from_file(&args.tx_body_file)?;
+
+    if tx_body_envelope.envelope_type != "Unwitnessed Tx BabbageEra" {
+        anyhow::bail!(
+            "Invalid transaction body type: expected 'Unwitnessed Tx BabbageEra', got '{}'",
+            tx_body_envelope.envelope_type
+        );
+    }
+
+    // 2. Load metadata
+    eprintln!("Loading metadata: {}", args.metadata_file.display());
+    let metadata = TransactionMetadata::read_from_file(&args.metadata_file)?;
+
+    eprintln!("\n━━━ Transaction Information ━━━");
+    eprintln!("Type: {}", metadata.transaction_type);
+    eprintln!("TX Hash: {}", metadata.tx_hash);
+    eprintln!("\n━━━ Signature Requirements ━━━");
+    eprintln!("Required signers: {}", metadata.required_signers.len());
+    eprintln!(
+        "Threshold: {}/{}",
+        metadata.signatures_needed.calculated_threshold,
+        metadata.signatures_needed.total_signers
+    );
+    eprintln!("\n━━━ Creating Witness ━━━");
+
+    // 3. Create witness
+    let witness_envelope = create_cardano_witness(
+        &tx_body_envelope,
+        &metadata,
+        &args.mnemonic_file,
+        args.account,
+    )?;
+
+    // 4. Write witness to file
+    witness_envelope.write_to_file(&args.output)?;
+
+    eprintln!("\n✓ Witness created: {}", args.output.display());
+    eprintln!("\nNext steps:");
+    eprintln!("1. Collect witnesses from other signers (need {}/{})",
+        metadata.signatures_needed.calculated_threshold,
+        metadata.signatures_needed.total_signers
+    );
+    eprintln!("2. Use 'witness assemble' to combine witnesses into signed transaction");
+
+    Ok(())
+}
+
+fn handle_assemble(args: AssembleArgs) -> Result<()> {
+    use crate::application::assemble_witnesses;
+    use crate::storage::{TextEnvelope, TransactionMetadata};
+
+    eprintln!("Assembling witnesses into signed transaction...\n");
+
+    // 1. Load transaction body
+    eprintln!("Loading transaction body: {}", args.tx_body_file.display());
+    let tx_body_envelope = TextEnvelope::read_from_file(&args.tx_body_file)?;
+
+    if tx_body_envelope.envelope_type != "Unwitnessed Tx BabbageEra" {
+        anyhow::bail!(
+            "Invalid transaction body type: expected 'Unwitnessed Tx BabbageEra', got '{}'",
+            tx_body_envelope.envelope_type
+        );
+    }
+
+    // 2. Load metadata
+    eprintln!("Loading metadata: {}", args.metadata_file.display());
+    let metadata = TransactionMetadata::read_from_file(&args.metadata_file)?;
+
+    // 3. Load all witnesses
+    eprintln!("\nLoading {} witness file(s):", args.witness_files.len());
+    let mut witness_envelopes = Vec::new();
+    for witness_file in &args.witness_files {
+        eprintln!("  - {}", witness_file.display());
+        let witness = TextEnvelope::read_from_file(witness_file)?;
+        witness_envelopes.push(witness);
+    }
+
+    eprintln!("\n━━━ Transaction Information ━━━");
+    eprintln!("Type: {}", metadata.transaction_type);
+    eprintln!("TX Hash: {}", metadata.tx_hash);
+    eprintln!("Threshold: {}/{}",
+        metadata.signatures_needed.calculated_threshold,
+        metadata.signatures_needed.total_signers
+    );
+    eprintln!("\n━━━ Assembling Witnesses ━━━");
+
+    // 4. Assemble witnesses (this validates signatures and checks threshold)
+    let signed_tx_envelope = assemble_witnesses(
+        &tx_body_envelope,
+        &metadata,
+        &witness_envelopes,
+    )?;
+
+    // 5. Write signed transaction to file
+    signed_tx_envelope.write_to_file(&args.output)?;
+
+    eprintln!("\n✓ Signed transaction assembled: {}", args.output.display());
+    eprintln!("\nNext steps:");
+    eprintln!("Submit transaction:");
+    eprintln!("  cardano-cli transaction submit --tx-file {} --testnet-magic 4", args.output.display());
+    eprintln!("Or:");
+    eprintln!("  midnight-cli tx submit --tx-file {}", args.output.display());
 
     Ok(())
 }

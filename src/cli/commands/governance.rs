@@ -14,6 +14,8 @@ pub enum GovernanceCommands {
     Generate(GovernanceGenerateArgs),
     /// Rotate council members by spending the governance contract UTxO
     Rotate(GovernanceRotateArgs),
+    /// Regenerate member JSON files from mnemonics with correct cardano_key_hash
+    RegenerateMembers(RegenerateMembersArgs),
 }
 
 #[derive(Args)]
@@ -88,6 +90,29 @@ pub struct GovernanceRotateArgs {
     pub ledger_state: Option<PathBuf>,
 }
 
+#[derive(Args)]
+pub struct RegenerateMembersArgs {
+    /// Mnemonic files (glob pattern or comma-separated list)
+    #[arg(long, value_delimiter = ',')]
+    pub mnemonic_files: Vec<PathBuf>,
+
+    /// Output directory for regenerated JSON files
+    #[arg(long)]
+    pub output_dir: PathBuf,
+
+    /// Overwrite existing files
+    #[arg(long)]
+    pub overwrite: bool,
+
+    /// Derivation path for sr25519 governance key
+    #[arg(long, default_value = "//midnight//governance")]
+    pub derivation: String,
+
+    /// Cardano account index
+    #[arg(long, default_value = "0")]
+    pub account: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GovernanceKey {
     /// Ed25519 verification key hash for Cardano operations (28 bytes hex)
@@ -102,6 +127,7 @@ pub async fn handle_governance_command(cmd: GovernanceCommands) -> Result<()> {
     match cmd {
         GovernanceCommands::Generate(args) => handle_governance_generate(args),
         GovernanceCommands::Rotate(args) => handle_governance_rotate(args).await,
+        GovernanceCommands::RegenerateMembers(args) => handle_regenerate_members(args),
     }
 }
 
@@ -1262,4 +1288,92 @@ async fn build_rotation_tx_offline(
     let signed_tx = tx_builder.build_and_sign(signing_keys)?;
 
     Ok(signed_tx)
+}
+
+fn handle_regenerate_members(args: RegenerateMembersArgs) -> Result<()> {
+    use std::fs;
+
+    eprintln!("Regenerating member JSON files from mnemonics...\n");
+
+    // Create output directory if it doesn't exist
+    if !args.output_dir.exists() {
+        fs::create_dir_all(&args.output_dir)?;
+        eprintln!("Created output directory: {}", args.output_dir.display());
+    }
+
+    let mut regenerated_count = 0;
+    let mut skipped_count = 0;
+
+    for mnemonic_file in &args.mnemonic_files {
+        eprintln!("\n━━━ Processing: {} ━━━", mnemonic_file.display());
+
+        // 1. Load mnemonic
+        let mnemonic = KeyReader::read_mnemonic_from_file(mnemonic_file)?;
+        let mnemonic_str = secrecy::ExposeSecret::expose_secret(&mnemonic);
+
+        // 2. Derive Cardano key hash using hayate
+        let wallet = hayate::wallet::Wallet::from_mnemonic_str(
+            mnemonic_str,
+            hayate::wallet::Network::Testnet,
+            args.account,
+        ).map_err(|e| anyhow::anyhow!("Failed to create Cardano wallet: {}", e))?;
+
+        let key_hash_bytes = wallet.payment_key_hash(0)
+            .map_err(|e| anyhow::anyhow!("Failed to compute key hash: {}", e))?;
+        let cardano_key_hash = hex::encode(&key_hash_bytes);
+
+        // 3. Derive Midnight sr25519 governance key
+        let governance_suri = format!("{}{}", mnemonic_str, args.derivation);
+        let governance_pair = Sr25519::from_suri(&governance_suri)?;
+        let governance_public = Sr25519::public_key(&governance_pair);
+        let governance_public_bytes: &[u8] = governance_public.as_ref();
+
+        eprintln!("  Cardano key hash: {}", cardano_key_hash);
+        eprintln!("  Sr25519 pubkey:   {}", hex::encode(governance_public_bytes));
+        eprintln!("  SS58 address:     {}", Sr25519::to_ss58_address(&governance_public));
+
+        // 4. Create governance key JSON
+        let governance_key = GovernanceKey {
+            cardano_key_hash,
+            sr25519_public_key: hex::encode(governance_public_bytes),
+            ss58_address: Sr25519::to_ss58_address(&governance_public),
+        };
+
+        // 5. Determine output filename (use mnemonic file base name)
+        let base_name = mnemonic_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid mnemonic filename"))?;
+
+        // Remove .mnemonic suffix if present
+        let base_name = base_name.strip_suffix(".mnemonic").unwrap_or(base_name);
+
+        let output_file = args.output_dir.join(format!("{}.json", base_name));
+
+        // 6. Check if file exists and handle overwrite flag
+        if output_file.exists() && !args.overwrite {
+            eprintln!("  ⏭  Skipped (file exists, use --overwrite to replace): {}", output_file.display());
+            skipped_count += 1;
+            continue;
+        }
+
+        // 7. Write JSON file
+        let json = serde_json::to_string_pretty(&governance_key)?;
+        fs::write(&output_file, json)?;
+
+        eprintln!("  ✓ Written: {}", output_file.display());
+        regenerated_count += 1;
+    }
+
+    eprintln!("\n━━━ Summary ━━━");
+    eprintln!("Regenerated: {}", regenerated_count);
+    eprintln!("Skipped:     {}", skipped_count);
+    eprintln!("Total:       {}", args.mnemonic_files.len());
+
+    if regenerated_count > 0 {
+        eprintln!("\n✓ Member JSON files regenerated successfully");
+        eprintln!("Output directory: {}", args.output_dir.display());
+    }
+
+    Ok(())
 }
