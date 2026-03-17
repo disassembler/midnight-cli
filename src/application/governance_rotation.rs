@@ -815,7 +815,8 @@ mod tests {
         let output_dir = std::path::Path::new("/tmp/test");
 
         let _args = CouncilRotationArgs {
-            current_state: &state,
+            contract_address: state.contract_address.clone(),
+            nft_policy_id: state.nft_policy_id.clone(),
             new_members: &members,
             hayate_endpoint: "http://localhost:50051".to_string(),
             wallet_mnemonic: "test mnemonic",
