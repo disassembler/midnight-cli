@@ -354,28 +354,42 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
         args.hayate_endpoint.clone(),
     ).await?;
 
-    // Query wallet UTxOs
+    // Query wallet UTxOs with detailed debugging
     eprintln!("Querying wallet UTxOs...");
     eprintln!("  Account: {}", args.account);
 
-    // Show addresses being queried
-    eprintln!("  Addresses being scanned:");
+    // Manually query UTxOs first to debug
+    use hayate::wallet::utxorpc_client::WalletUtxorpcClient;
+
+    let mut debug_client = WalletUtxorpcClient::connect(args.hayate_endpoint.clone()).await?;
+
+    eprintln!("\n━━━ DEBUG: UTxORPC Query ━━━");
+
+    // Query first 3 addresses to see what's happening
     for i in 0..3 {
         if let Ok(enterprise_addr) = wallet.enterprise_address(i) {
-            eprintln!("    Enterprise {}: {}", i, enterprise_addr);
-        }
-        if let Ok(payment_addr) = wallet.payment_address(i) {
-            eprintln!("    Payment {}: {}", i, payment_addr);
+            eprintln!("\n  Enterprise {}:", i);
+            eprintln!("    Address: {}", enterprise_addr);
+
+            let addr = Address::from_bech32(&enterprise_addr)?;
+            let addr_bytes = addr.to_vec();
+
+            eprintln!("    Querying UTxORPC for address bytes: {}", hex::encode(&addr_bytes));
+
+            let utxos = debug_client.query_utxos(vec![addr_bytes]).await?;
+
+            eprintln!("    Response: {} UTxOs found", utxos.len());
+            for (idx, utxo) in utxos.iter().enumerate() {
+                eprintln!("      UTxO {}: {}#{}", idx, hex::encode(&utxo.tx_hash), utxo.output_index);
+                eprintln!("        Coin: {} lovelace", utxo.coin);
+                eprintln!("        Assets: {}", utxo.assets.len());
+            }
         }
     }
-    eprintln!("  ... and 17 more of each type");
 
+    eprintln!("\n━━━ Running UnifiedTxBuilder Query ━━━");
     tx_builder.query_utxos().await?;
-
-    // Debug: Check what UTxOs were found
-    eprintln!("\n  DEBUG: Checking available UTxOs...");
-    // The builder doesn't expose available_utxos, so we can't check directly
-    // but the build will fail if there are no UTxOs
+    eprintln!("  ✓ Query completed");
 
     // Build one-shot minting policy (native script)
     // ScriptPubkey format: requires specific UTxO to be spent
