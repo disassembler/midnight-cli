@@ -33,9 +33,13 @@ pub struct DeployGovernanceArgs {
     #[arg(long, default_value = "http://localhost:50051")]
     pub hayate_endpoint: String,
 
-    /// Wallet mnemonic file for fees/collateral (supports GPG)
+    /// Wallet mnemonic file for fees/collateral (for non-air-gap or signing)
     #[arg(long)]
-    pub mnemonic_file: PathBuf,
+    pub mnemonic_file: Option<PathBuf>,
+
+    /// Account extended public key (xpub) for air-gap mode - use midnight-cli key export-account-key
+    #[arg(long)]
+    pub account_xpub: Option<String>,
 
     /// Wallet account index
     #[arg(long, default_value = "0")]
@@ -105,9 +109,38 @@ async fn handle_deploy_council(args: DeployGovernanceArgs) -> Result<()> {
         eprintln!("  ✓ Loaded: {}", member_file.display());
     }
 
-    // Load wallet mnemonic
-    let wallet_mnemonic = KeyReader::read_mnemonic_from_file(&args.mnemonic_file)?;
-    let wallet_mnemonic_str = secrecy::ExposeSecret::expose_secret(&wallet_mnemonic);
+    // Validate wallet credentials
+    let (wallet_mnemonic_opt, account_xpub_opt) = match (&args.mnemonic_file, &args.account_xpub, args.air_gap) {
+        (Some(mnemonic_file), None, false) => {
+            // Non-air-gap mode: use mnemonic
+            let mnemonic = KeyReader::read_mnemonic_from_file(mnemonic_file)?;
+            let mnemonic_str = secrecy::ExposeSecret::expose_secret(&mnemonic);
+            (Some(mnemonic_str.to_string()), None)
+        }
+        (None, Some(xpub), true) => {
+            // Air-gap mode: use account xpub
+            (None, Some(xpub.clone()))
+        }
+        (Some(mnemonic_file), None, true) => {
+            // Air-gap mode with mnemonic (user wants to keep it simple)
+            eprintln!("⚠ Warning: Using mnemonic in air-gap mode");
+            eprintln!("   For better security, use --account-xpub instead");
+            eprintln!("   Export with: midnight-cli key export-account-key --mnemonic-file <file>");
+            eprintln!();
+            let mnemonic = KeyReader::read_mnemonic_from_file(mnemonic_file)?;
+            let mnemonic_str = secrecy::ExposeSecret::expose_secret(&mnemonic);
+            (Some(mnemonic_str.to_string()), None)
+        }
+        (None, None, _) => {
+            anyhow::bail!("Must provide either --mnemonic-file or --account-xpub");
+        }
+        (Some(_), Some(_), _) => {
+            anyhow::bail!("Cannot provide both --mnemonic-file and --account-xpub");
+        }
+        (None, Some(_), false) => {
+            anyhow::bail!("--account-xpub requires --air-gap mode");
+        }
+    };
 
     // Call deploy_contract
     let deploy_args = DeploymentArgs {
@@ -116,7 +149,8 @@ async fn handle_deploy_council(args: DeployGovernanceArgs) -> Result<()> {
         nft_policy_id: None,
         initial_utxo_ref: args.initial_utxo_ref.clone(),
         hayate_endpoint: args.hayate_endpoint.clone(),
-        wallet_mnemonic: wallet_mnemonic_str,
+        wallet_mnemonic: wallet_mnemonic_opt.as_deref(),
+        account_xpub: account_xpub_opt.as_deref(),
         account: args.account,
         output_dir: &args.output_dir,
         air_gap: args.air_gap,

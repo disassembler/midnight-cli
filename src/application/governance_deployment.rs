@@ -152,8 +152,11 @@ pub struct DeploymentArgs<'a> {
     /// Hayate endpoint for querying UTxOs
     pub hayate_endpoint: String,
 
-    /// Wallet mnemonic for fees/collateral
-    pub wallet_mnemonic: &'a str,
+    /// Wallet mnemonic for fees/collateral (for non-air-gap or when signing)
+    pub wallet_mnemonic: Option<&'a str>,
+
+    /// Account extended public key (for air-gap mode)
+    pub account_xpub: Option<&'a str>,
 
     /// Wallet account index
     pub account: u32,
@@ -320,12 +323,29 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
     use hayate::wallet::utxorpc_client::AssetData;
     use std::sync::Arc;
 
-    // Create wallet
-    let wallet = Arc::new(Wallet::from_mnemonic_str(
-        args.wallet_mnemonic,
-        Network::Testnet,
-        args.account,
-    )?);
+    // Create wallet for address derivation and UTxO queries
+    // Note: In air-gap mode, this wallet is NOT used for signing - only for:
+    // - Deriving addresses to query UTxOs
+    // - Calculating change addresses
+    // The actual signing happens on the air-gap machine
+    let wallet = if let Some(_xpub) = args.account_xpub {
+        // TODO: Support creating wallet from xpub for true air-gap security
+        // For now, fall back to requiring mnemonic
+        eprintln!("⚠ Account xpub support coming soon");
+        eprintln!("   For now, use --mnemonic-file (only used for address derivation, not signing)");
+        anyhow::bail!("--account-xpub not yet implemented. Use --mnemonic-file instead.");
+    } else if let Some(wallet_mnemonic) = args.wallet_mnemonic {
+        if args.air_gap {
+            eprintln!("ℹ Using mnemonic for address derivation only (not for signing)");
+        }
+        Arc::new(Wallet::from_mnemonic_str(
+            wallet_mnemonic,
+            Network::Testnet,
+            args.account,
+        )?)
+    } else {
+        anyhow::bail!("Must provide either --wallet-mnemonic or --account-xpub");
+    };
 
     // Create UnifiedTxBuilder
     eprintln!("Connecting to hayate endpoint...");
