@@ -391,20 +391,29 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
     tx_builder.query_utxos().await?;
     eprintln!("  ✓ Query completed");
 
-    // Build one-shot minting policy (native script)
-    // ScriptPubkey format: requires specific UTxO to be spent
+    // Build native minting policy
+    // For now: use simple ScriptPubkey (requires wallet signature)
+    // TODO: Implement proper one-shot policy using initial_utxo_ref
     let mut policy_script_bytes = Vec::new();
     {
         let mut enc = Encoder::new(&mut policy_script_bytes);
-        // Type 0 = ScriptPubkey (requires UTxO)
+
+        // Get wallet's payment key hash for the policy
+        let payment_addr_str = wallet.enterprise_address(0)?;
+        let payment_addr = Address::from_bech32(&payment_addr_str)?;
+        let addr_bytes = payment_addr.to_vec();
+
+        // Extract key hash from address (skip first byte which is address type)
+        let key_hash = &addr_bytes[1..29]; // 28 bytes key hash
+
+        // Type 0 = ScriptPubkey (requires signature from this key)
         enc.array(2)?;
         enc.u32(0)?;
-        enc.array(2)?;
-        enc.bytes(&initial_tx_hash)?;
-        enc.u32(initial_output_index)?;
+        enc.bytes(key_hash)?;
     }
 
-    eprintln!("  One-shot policy script: {} bytes", policy_script_bytes.len());
+    eprintln!("  Minting policy script: {} bytes", policy_script_bytes.len());
+    eprintln!("  ⚠ Using simple signature-based policy (not one-shot)");
 
     // Mint 1 NFT with the one-shot policy
     let asset_name_bytes = asset_name.as_bytes().to_vec();
