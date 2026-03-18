@@ -311,52 +311,221 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
     let asset_name = args.contract_type.as_str();
     eprintln!("  NFT Asset name: {}", asset_name);
 
-    // Create deployment state file and instructions
-    eprintln!("\n━━━ Deployment Instructions ━━━");
-    eprintln!();
-    eprintln!("To deploy {} governance:", args.contract_type.display_name());
-    eprintln!();
-    eprintln!("1. Use cardano-cli to build and submit the deployment transaction:");
-    eprintln!("   - Spend the initial UTxO: {}#{}", utxo_parts[0], initial_output_index);
-    eprintln!("   - Mint 1 NFT with policy ID: {}", policy_id_hex);
-    eprintln!("   - Send NFT to contract address: {}", contract_address);
-    eprintln!("   - Attach inline datum (CBOR): {}", hex::encode(&datum_cbor));
-    eprintln!();
-    eprintln!("2. After transaction confirms, update the state file below with:");
-    eprintln!("   - deployment_tx_hash: <actual_tx_hash>");
-    eprintln!();
-    eprintln!("3. Then use for rotations:");
-    eprintln!("   midnight-cli rotate {} --state-file <state_file>", args.contract_type.as_str());
+    // Build deployment transaction
+    eprintln!("\n━━━ Building Deployment Transaction ━━━");
 
-    // Generate deployment state file
-    let state = DeploymentState {
-        contract_type: args.contract_type.as_str().to_string(),
-        contract_address: contract_address.clone(),
-        nft_policy_id: policy_id_hex.clone(),
-        nft_asset_name: asset_name.to_string(),
-        logic_round: 0,
-        members: args.members.iter().map(SerializableMember::from).collect(),
-        deployment_tx_hash: "UPDATE_AFTER_DEPLOYMENT".to_string(),
-        deployed_at: chrono::Utc::now().to_rfc3339(),
+    use hayate::wallet::{Wallet, Network};
+    use hayate::wallet::unified_tx::UnifiedTxBuilder;
+    use hayate::wallet::plutus::DatumOption;
+    use hayate::wallet::utxorpc_client::AssetData;
+    use std::sync::Arc;
+
+    // Create wallet
+    let wallet = Arc::new(Wallet::from_mnemonic_str(
+        args.wallet_mnemonic,
+        Network::Testnet,
+        args.account,
+    )?);
+
+    // Create UnifiedTxBuilder
+    eprintln!("Connecting to hayate endpoint...");
+    let mut tx_builder = UnifiedTxBuilder::new(
+        Arc::clone(&wallet),
+        args.hayate_endpoint.clone(),
+    ).await?;
+
+    // Build one-shot minting policy (native script)
+    // ScriptPubkey format: requires specific UTxO to be spent
+    let mut policy_script_bytes = Vec::new();
+    {
+        let mut enc = Encoder::new(&mut policy_script_bytes);
+        // Type 0 = ScriptPubkey (requires UTxO)
+        enc.array(2)?;
+        enc.u32(0)?;
+        enc.array(2)?;
+        enc.bytes(&initial_tx_hash)?;
+        enc.u32(initial_output_index)?;
+    }
+
+    eprintln!("  One-shot policy script: {} bytes", policy_script_bytes.len());
+
+    // Mint 1 NFT with the one-shot policy
+    let asset_name_bytes = asset_name.as_bytes().to_vec();
+    tx_builder.mint_with_native_script(
+        policy_script_bytes.clone(),
+        policy_id,
+        asset_name_bytes.clone(),
+        1, // Mint 1 NFT
+    )?;
+
+    eprintln!("  Minting 1 {} NFT", asset_name);
+
+    // Send NFT to contract address with inline datum
+    let nft_asset = AssetData {
+        policy_id: policy_id.to_vec(),
+        asset_name: asset_name_bytes,
+        amount: 1,
     };
 
-    // Create output directory
-    std::fs::create_dir_all(args.output_dir)?;
-    let state_file = args.output_dir.join(format!("{}-governance.state.json", args.contract_type.as_str()));
-    state.write_to_file(&state_file)?;
+    tx_builder.pay_to_script_with_assets(
+        contract_address_bytes.clone(),
+        2_000_000, // 2 ADA locked with NFT
+        vec![nft_asset],
+        DatumOption::inline(datum_cbor.clone()),
+        None, // No script reference
+    )?;
 
-    eprintln!("\n✓ State file created: {}", state_file.display());
-    eprintln!("✓ Contract address: {}", contract_address);
-    eprintln!("✓ NFT Policy ID: {}", policy_id_hex);
+    eprintln!("  Sending NFT to contract: {}", contract_address);
+    eprintln!("  With inline datum ({} bytes)", datum_cbor.len());
 
-    Ok(DeploymentResult {
-        contract_address,
-        nft_policy_id: policy_id_hex,
-        tx_hash: None,
-        state_file,
-        tx_body_file: None,
-        metadata_file: None,
-    })
+    // Build transaction
+    eprintln!("\nBuilding transaction...");
+    let built_tx = tx_builder.build().await?;
+
+    let tx_hash_hex = hex::encode(&built_tx.tx_hash);
+    eprintln!("  Transaction hash: {}", tx_hash_hex);
+    eprintln!("  Fee: {} lovelace", built_tx.fee_paid);
+    eprintln!("  Inputs used: {}", built_tx.inputs_used.len());
+
+    if args.air_gap {
+        // Create air-gap files
+        eprintln!("\n━━━ Creating Air-Gap Files ━━━");
+
+        use crate::storage::{TextEnvelope, TransactionMetadata, SignaturesNeeded, ProposalDetails};
+
+        std::fs::create_dir_all(args.output_dir)?;
+
+        // Create .txbody file
+        let tx_body_file = args.output_dir.join(format!("{}-deployment.txbody", args.contract_type.as_str()));
+        let tx_body_envelope = TextEnvelope::unwitnessed_tx(
+            &built_tx.tx_bytes,
+            format!("{} deployment transaction", args.contract_type.display_name())
+        );
+        tx_body_envelope.write_to_file(&tx_body_file)?;
+        eprintln!("✓ Created: {}", tx_body_file.display());
+
+        // Create metadata
+        let metadata = TransactionMetadata {
+            transaction_type: format!("{}_deployment", args.contract_type.as_str()),
+            tx_hash: format!("0x{}", tx_hash_hex),
+            required_signers: vec![], // No governance signers for deployment
+            signatures_needed: SignaturesNeeded::new(0), // Just wallet signature
+            proposal_details: ProposalDetails {
+                current_logic_round: 0,
+                new_logic_round: 0,
+                description: Some(format!("Deploy {} governance contract with NFT", args.contract_type.display_name())),
+                contract_address: Some(contract_address.clone()),
+                nft_policy_id: Some(policy_id_hex.clone()),
+            },
+        };
+
+        let metadata_file = args.output_dir.join(format!("{}-deployment.metadata", args.contract_type.as_str()));
+        metadata.write_to_file(&metadata_file)?;
+        eprintln!("✓ Created: {}", metadata_file.display());
+
+        eprintln!("\n━━━ Air-Gap Workflow ━━━");
+        eprintln!("1. Sign transaction with wallet key:");
+        eprintln!("   cardano-cli transaction sign \\");
+        eprintln!("     --tx-body-file {} \\", tx_body_file.display());
+        eprintln!("     --signing-key-file payment.skey \\");
+        eprintln!("     --out-file deployment.tx");
+        eprintln!();
+        eprintln!("2. Submit transaction:");
+        eprintln!("   cardano-cli transaction submit \\");
+        eprintln!("     --tx-file deployment.tx \\");
+        eprintln!("     --testnet-magic 4");
+
+        // Create state file
+        let state = DeploymentState {
+            contract_type: args.contract_type.as_str().to_string(),
+            contract_address: contract_address.clone(),
+            nft_policy_id: policy_id_hex.clone(),
+            nft_asset_name: asset_name.to_string(),
+            logic_round: 0,
+            members: args.members.iter().map(SerializableMember::from).collect(),
+            deployment_tx_hash: tx_hash_hex.clone(),
+            deployed_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        std::fs::create_dir_all(args.output_dir)?;
+        let state_file = args.output_dir.join(format!("{}-governance.state.json", args.contract_type.as_str()));
+        state.write_to_file(&state_file)?;
+
+        eprintln!("\n✓ State file created: {}", state_file.display());
+
+        Ok(DeploymentResult {
+            contract_address,
+            nft_policy_id: policy_id_hex,
+            tx_hash: Some(tx_hash_hex),
+            state_file,
+            tx_body_file: Some(tx_body_file),
+            metadata_file: Some(metadata_file),
+        })
+    } else {
+        // Sign and submit
+        eprintln!("\n━━━ Signing and Submitting ━━━");
+
+        // Rebuild to get a fresh builder for signing
+        let mut submit_builder = UnifiedTxBuilder::new(
+            Arc::clone(&wallet),
+            args.hayate_endpoint.clone(),
+        ).await?;
+
+        // Re-apply same operations
+        submit_builder.mint_with_native_script(
+            policy_script_bytes,
+            policy_id,
+            asset_name.as_bytes().to_vec(),
+            1,
+        )?;
+
+        let nft_asset = AssetData {
+            policy_id: policy_id.to_vec(),
+            asset_name: asset_name.as_bytes().to_vec(),
+            amount: 1,
+        };
+
+        submit_builder.pay_to_script_with_assets(
+            contract_address_bytes.clone(),
+            2_000_000,
+            vec![nft_asset],
+            DatumOption::inline(datum_cbor.clone()),
+            None,
+        )?;
+
+        // Build, sign, and submit in one call
+        let submit_result = submit_builder.build_sign_submit().await?;
+
+        eprintln!("✓ Transaction submitted: {}", hex::encode(&submit_result));
+        eprintln!("✓ Contract deployed at: {}", contract_address);
+
+        // Create state file
+        let state = DeploymentState {
+            contract_type: args.contract_type.as_str().to_string(),
+            contract_address: contract_address.clone(),
+            nft_policy_id: policy_id_hex.clone(),
+            nft_asset_name: asset_name.to_string(),
+            logic_round: 0,
+            members: args.members.iter().map(SerializableMember::from).collect(),
+            deployment_tx_hash: tx_hash_hex.clone(),
+            deployed_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        std::fs::create_dir_all(args.output_dir)?;
+        let state_file = args.output_dir.join(format!("{}-governance.state.json", args.contract_type.as_str()));
+        state.write_to_file(&state_file)?;
+
+        eprintln!("✓ State file created: {}", state_file.display());
+
+        Ok(DeploymentResult {
+            contract_address,
+            nft_policy_id: policy_id_hex,
+            tx_hash: Some(tx_hash_hex),
+            state_file,
+            tx_body_file: None,
+            metadata_file: None,
+        })
+    }
 }
 
 #[cfg(test)]
