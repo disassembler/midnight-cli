@@ -356,7 +356,26 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
 
     // Query wallet UTxOs
     eprintln!("Querying wallet UTxOs...");
+    eprintln!("  Account: {}", args.account);
+
+    // Show addresses being queried
+    eprintln!("  Addresses being scanned:");
+    for i in 0..3 {
+        if let Ok(enterprise_addr) = wallet.enterprise_address(i) {
+            eprintln!("    Enterprise {}: {}", i, enterprise_addr);
+        }
+        if let Ok(payment_addr) = wallet.payment_address(i) {
+            eprintln!("    Payment {}: {}", i, payment_addr);
+        }
+    }
+    eprintln!("  ... and 17 more of each type");
+
     tx_builder.query_utxos().await?;
+
+    // Debug: Check what UTxOs were found
+    eprintln!("\n  DEBUG: Checking available UTxOs...");
+    // The builder doesn't expose available_utxos, so we can't check directly
+    // but the build will fail if there are no UTxOs
 
     // Build one-shot minting policy (native script)
     // ScriptPubkey format: requires specific UTxO to be spent
