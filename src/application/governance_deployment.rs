@@ -354,6 +354,10 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
         args.hayate_endpoint.clone(),
     ).await?;
 
+    // Query wallet UTxOs
+    eprintln!("Querying wallet UTxOs...");
+    tx_builder.query_utxos().await?;
+
     // Build one-shot minting policy (native script)
     // ScriptPubkey format: requires specific UTxO to be spent
     let mut policy_script_bytes = Vec::new();
@@ -490,6 +494,9 @@ pub async fn deploy_contract(args: DeploymentArgs<'_>) -> Result<DeploymentResul
             Arc::clone(&wallet),
             args.hayate_endpoint.clone(),
         ).await?;
+
+        // Query UTxOs
+        submit_builder.query_utxos().await?;
 
         // Re-apply same operations
         submit_builder.mint_with_native_script(
